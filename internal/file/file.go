@@ -304,7 +304,6 @@ func (mgr *FileMgr) BlockSize() int32 {
 func (mgr *FileMgr) getFile(filename string) (*os.File, func(), error) {
 	unlock := mgr.kmu.lock(filename)
 
-	var f *os.File
 	f, found := mgr.openFiles[filename]
 	if !found {
 		f, err := os.OpenFile(path.Join(mgr.dbDirectoryPath, filename), os.O_RDWR|os.O_CREATE, 0644)
@@ -319,13 +318,13 @@ func (mgr *FileMgr) getFile(filename string) (*os.File, func(), error) {
 
 func (mgr *FileMgr) incRwCnt(rw string) {
 	mgr.rwCnt.mu.Lock()
+	defer mgr.rwCnt.mu.Unlock()
 	switch rw {
 	case "w":
 		mgr.rwCnt.w += 1
 	case "r":
 		mgr.rwCnt.r += 1
 	}
-	mgr.rwCnt.mu.Unlock()
 }
 
 type keyMutex struct {

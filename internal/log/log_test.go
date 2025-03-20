@@ -1,0 +1,498 @@
+package log
+
+import (
+	"bytes"
+	"reflect"
+	"testing"
+
+	"github.com/keingoon/simpledb/internal/file"
+)
+
+func initFileLogMgr(dir string, blocksize int32, logfile string) (*file.FileMgr, *LogMgr, error) {
+	fileMgr, err := file.NewFileMgr(dir, blocksize)
+	if err != nil {
+		return nil, nil, err
+	}
+	logMgr, err := NewLogMgr(fileMgr, logfile)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fileMgr, logMgr, nil
+}
+
+func createLogRec(i int32, str string) []byte {
+	recstrlen := len([]rune(str))
+	rec := make([]byte, int32Size+file.MaxLength(recstrlen))
+	strpos := int32(0)
+	intpos := int32(int32Size + file.MaxLength(recstrlen))
+	p := file.NewLogPage(rec)
+	p.SetStr(strpos, str)
+	p.SetInt32(intpos, i)
+	return rec
+}
+
+func TestLogMgr(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NewLogMgr at first", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		b := make([]byte, blocksize)
+		expectedpage := file.NewLogPage(b)
+		expectedpage.SetInt32(0, blocksize)
+		if !reflect.DeepEqual(logMgr.logpage, expectedpage) {
+			t.Errorf("expected empty block %v, got %v", *expectedpage, *logMgr.logpage)
+		}
+
+		expectedblk := file.NewBlockId(logfile, 0)
+		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
+			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
+		}
+	})
+
+	t.Run("Flush after Append single log rec", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		logMgr.Append(rec)
+
+		// Flush single log rec
+		logMgr.Flush(1)
+
+		if logMgr.latestLSN != 1 {
+			t.Errorf("expected latestLSN %v, got %v", 1, logMgr.latestLSN)
+		}
+
+		if logMgr.lastSavedLSN != 1 {
+			t.Errorf("expected lastSavedLSN %v, got %v", 1, logMgr.lastSavedLSN)
+		}
+	})
+
+	t.Run("Iterater after Append single log rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		logMgr.Append(rec)
+
+		// Iterater single log rec
+		logMgr.Iterater()
+
+		if logMgr.latestLSN != 1 {
+			t.Errorf("expected latestLSN %v, got %v", 1, logMgr.latestLSN)
+		}
+
+		if logMgr.lastSavedLSN != 1 {
+			t.Errorf("expected lastSavedLSN %v, got %v", 1, logMgr.lastSavedLSN)
+		}
+	})
+
+	t.Run("Append single log rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		lsn, err := logMgr.Append(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if lsn != 1 {
+			t.Errorf("expected latestLSN %v, got %v", 1, logMgr.latestLSN)
+		}
+
+		logpage := logMgr.logpage
+		recpos := logpage.GetInt32(0)
+		recGeted := logpage.GetBytes(recpos)
+		if !bytes.Equal(rec, recGeted) {
+			t.Errorf("expected logpage rec %v, got %v", []byte(rec), recGeted)
+		}
+	})
+
+	t.Run("Append 20 log rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append 20 log rec
+		var latestRec []byte
+		for i := 0; i < 20; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+			latestRec = rec
+		}
+
+		expectedblk := file.NewBlockId(logfile, 1)
+		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
+			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
+		}
+
+		logpage := logMgr.logpage
+		recpos := logpage.GetInt32(0)
+		recGeted := logpage.GetBytes(recpos)
+
+		if !bytes.Equal(latestRec, recGeted) {
+			t.Errorf("expected logpage rec %v, got %v", latestRec, recGeted)
+		}
+
+		if logMgr.latestLSN != 20 {
+			t.Errorf("expected latestLSN %v, got %v", 20, logMgr.latestLSN)
+		}
+
+		// blocksize / (17 + int32Size) = 12
+		if logMgr.lastSavedLSN != 12 {
+			t.Errorf("expected lastSavedLSN %v, got %v", 12, logMgr.lastSavedLSN)
+		}
+	})
+
+	t.Run("appendNewBlock", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		fileMgr, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		expectedBlk := file.NewBlockId(logfile, 1)
+		blk, err := logMgr.appendNewBlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(blk, expectedBlk) {
+			t.Errorf("expected empty block %v, got %v", *expectedBlk, *blk)
+		}
+
+		logpage := logMgr.logpage
+		recpos := logpage.GetInt32(0)
+		if recpos != blocksize {
+			t.Errorf("expected logpage recpos %v, got %v", blocksize, recpos)
+		}
+
+		fileMgr.Read(blk, logpage)
+		recposInBlock := logpage.GetInt32(0)
+		if recposInBlock != blocksize {
+			t.Errorf("expected recpos in block %v, got %v", blocksize, recposInBlock)
+		}
+	})
+
+	t.Run("flush after Append 1 rec", func(t *testing.T) {
+		// TODO: test
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		fileMgr, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		if _, err := logMgr.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.flush()
+
+		blk := logMgr.currentblk
+		logpage := logMgr.logpage
+		fileMgr.Read(blk, logpage)
+		recpos := logpage.GetInt32(0)
+		recGeted := logpage.GetBytes(recpos)
+
+		if !bytes.Equal(rec, recGeted) {
+			t.Errorf("expected rec in block %v, got %v", rec, recGeted)
+		}
+
+		if logMgr.lastSavedLSN != 1 {
+			t.Errorf("expected lastSavedLSN %v, got %v", 1, logMgr.lastSavedLSN)
+		}
+	})
+}
+
+func TestLogIterator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NewLogIterator", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		fileMgr, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logIterator := NewLogIterator(fileMgr, logMgr.currentblk)
+
+		if logIterator.currentpos != blocksize {
+			t.Errorf("expected currentpos %v, got %v", blocksize, logIterator.currentpos)
+		}
+		if logIterator.boundary != blocksize {
+			t.Errorf("expected boundary %v, got %v", blocksize, logIterator.boundary)
+		}
+	})
+
+	t.Run("HasNext called after Append 1 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		if _, err := logMgr.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+
+		iter := logMgr.Iterater()
+		hasNext := iter.HasNext()
+		if !hasNext {
+			t.Errorf("expected HasNext %v, got %v", true, hasNext)
+		}
+	})
+
+	t.Run("HasNext called from Next call after Append 1 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append single log rec
+		rec := createLogRec(1, logrecord)
+		if _, err := logMgr.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+
+		iter := logMgr.Iterater()
+		iter.Next()
+		hasNext := iter.HasNext()
+		if hasNext {
+			t.Errorf("expected HasNext %v, got %v", false, hasNext)
+		}
+	})
+
+	t.Run("HasNext called from Next 15 called after Append 20 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append 20 log rec
+		for i := 0; i < 20; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		iter := logMgr.Iterater()
+		for i := 0; i < 15; i++ {
+			iter.Next()
+		}
+
+		hasNext := iter.HasNext()
+		if !hasNext {
+			t.Errorf("expected HasNext %v, got %v", true, hasNext)
+		}
+	})
+
+	t.Run("HasNext called from Next 20 called after Append 20 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append 20 log rec
+		for i := 0; i < 20; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		iter := logMgr.Iterater()
+		for i := 0; i < 20; i++ {
+			iter.Next()
+		}
+
+		hasNext := iter.HasNext()
+		if hasNext {
+			t.Errorf("expected HasNext %v, got %v", false, hasNext)
+		}
+	})
+
+	t.Run("Next 15 called after Append 20 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append 20 log rec
+		for i := 0; i < 20; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		iter := logMgr.Iterater()
+		var rec []byte
+		for i := 0; i < 15; i++ {
+			rec = iter.Next()
+		}
+		recExpected := createLogRec(int32(15), logrecord)
+		if !bytes.Equal(rec, recExpected) {
+			t.Errorf("expected Next rec %v, got %v", recExpected, rec)
+		}
+	})
+
+	t.Run("moveToBlock after Append 20 rec", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Append 20 log rec
+		for i := 0; i < 20; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		iter := logMgr.Iterater()
+		// currentBlk number is 1, nextBlk number is 0
+		nextBlk := file.NewBlockId(logfile, 0)
+		iter.moveToBlock(nextBlk)
+
+		p := iter.p
+		recpos := p.GetInt32(0)
+		recFirst := p.GetBytes(recpos)
+		// blocksize / (17 + int32Size) = 12
+		recFirstExpected := createLogRec(12, logrecord)
+		if !bytes.Equal(recFirst, recFirstExpected) {
+			t.Errorf("expected page first rec after moveToBlock %v, got %v", recFirstExpected, recFirst)
+		}
+
+		if iter.boundary != recpos {
+			t.Errorf("expected boundary after moveToBlock %v, got %v", recpos, iter.boundary)
+		}
+		if iter.currentpos != recpos {
+			t.Errorf("expected boundary after moveToBlock %v, got %v", recpos, iter.currentpos)
+		}
+	})
+}
