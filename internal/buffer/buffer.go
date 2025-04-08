@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -60,7 +61,7 @@ func (buff *Buffer) flush() {
 	if txnum >= 0 {
 		lm.Flush(lsn)
 		fm.Write(blk, contents)
-		txnum -= 1
+		buff.txnum -= 1
 	}
 }
 
@@ -72,29 +73,34 @@ func (buff *Buffer) unpin() {
 	buff.pins -= 1
 }
 
+type waitToken struct{}
+
+const Maxtime = 10000
+
 type BufferMgr struct {
 	bufferpool   []*Buffer
 	numAvailable int32
 	Maxtime      int64
-	cond         sync.Cond
+	mu           sync.Mutex
+	waitCh       chan *waitToken
 }
 
-func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32) *BufferMgr {
+func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int32) *BufferMgr {
 	bufferpool := make([]*Buffer, numbuffs)
 	for i := 0; i < int(numbuffs); i++ {
 		bufferpool[i] = NewBuffer(fm, lm)
 	}
 
-	return &BufferMgr{bufferpool, numbuffs, 10000, sync.Cond{}}
+	return &BufferMgr{bufferpool: bufferpool, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
 }
 
-func (buffMgr *BufferMgr) available() int32 {
+func (buffMgr *BufferMgr) Available() int32 {
 	return buffMgr.numAvailable
 }
 
-func (buffMgr *BufferMgr) flushAll(txnum int32) {
-	buffMgr.cond.L.Lock()
-	defer buffMgr.cond.L.Unlock()
+func (buffMgr *BufferMgr) FlushAll(ctx context.Context, txnum int32) {
+	buffMgr.mu.Lock()
+	defer buffMgr.mu.Unlock()
 	bufferpool := buffMgr.bufferpool
 	for _, buff := range bufferpool {
 		if buff.ModifyingTx() == txnum {
@@ -103,38 +109,39 @@ func (buffMgr *BufferMgr) flushAll(txnum int32) {
 	}
 }
 
-func (buffMgr *BufferMgr) unpin(buff *Buffer) {
-	buffMgr.cond.L.Lock()
-	defer buffMgr.cond.L.Unlock()
+func (buffMgr *BufferMgr) Unpin(ctx context.Context, buff *Buffer) {
+	buffMgr.mu.Lock()
 
 	buff.unpin()
 	if !buff.IsPinned() {
 		buffMgr.numAvailable += 1
+		// TODO: UnpinがPinよりcall数を超過した時のgoroutine deadlock考慮する
+		buffMgr.waitCh <- &waitToken{}
 	}
+	buffMgr.mu.Unlock()
 }
 
-func (buffMgr *BufferMgr) Pin(blk *file.BlockId) error {
-	buffMgr.cond.L.Lock()
-	defer buffMgr.cond.L.Unlock()
+func (buffMgr *BufferMgr) Pin(ctx context.Context, blk *file.BlockId) (*Buffer, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(buffMgr.Maxtime)*time.Millisecond)
+	defer cancel()
+
+	buffMgr.mu.Lock()
 
 	var buff *Buffer
-	timestamp := time.Now()
 	buff = buffMgr.tryToPin(blk)
-	for buff == nil && !buffMgr.waitingTooLong(timestamp) {
-		buffMgr.cond.Wait()
-		time.Sleep(time.Duration(buffMgr.Maxtime) * time.Second)
-		buff = buffMgr.tryToPin(blk)
-	}
-	if buff == nil {
-		return errors.New("buffer abort exception")
-	}
-	return nil
-}
 
-func (buffMgr *BufferMgr) waitingTooLong(starttime time.Time) bool {
-	// use wall clock
-	currentTimestamp := time.Now().Round(0)
-	return currentTimestamp.Sub(starttime).Seconds() > float64(buffMgr.Maxtime)
+	for buff == nil {
+		buffMgr.mu.Unlock()
+		select {
+		case <-buffMgr.waitCh:
+			buffMgr.mu.Lock()
+			buff = buffMgr.tryToPin(blk)
+		case <-ctx.Done():
+			return nil, errors.New("buffer abort exception")
+		}
+	}
+	buffMgr.mu.Unlock()
+	return buff, nil
 }
 
 func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
