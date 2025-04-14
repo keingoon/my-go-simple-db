@@ -78,11 +78,13 @@ type waitToken struct{}
 const Maxtime = 10000
 
 type BufferMgr struct {
-	bufferpool   []*Buffer
-	numAvailable int32
-	Maxtime      int64
-	mu           sync.Mutex
-	waitCh       chan *waitToken
+	bufferpool    []*Buffer
+	blkBufferMap  map[uint64]*Buffer
+	lruBufferList *LRUList
+	numAvailable  int32
+	Maxtime       int64
+	mu            sync.Mutex
+	waitCh        chan *waitToken
 }
 
 func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int32) *BufferMgr {
@@ -91,7 +93,10 @@ func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int
 		bufferpool[i] = NewBuffer(fm, lm)
 	}
 
-	return &BufferMgr{bufferpool: bufferpool, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
+	blkBufferMap := make(map[uint64]*Buffer)
+	lruBufferList := NewLRUList(bufferpool)
+
+	return &BufferMgr{bufferpool: bufferpool, blkBufferMap: blkBufferMap, lruBufferList: lruBufferList, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
 }
 
 func (buffMgr *BufferMgr) Available() int32 {
@@ -148,11 +153,12 @@ func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
 	var buff *Buffer
 	buff = buffMgr.findExistingBuffer(blk)
 	if buff == nil {
-		buff = buffMgr.chooseUnpinnedBuffer()
+		buff = buffMgr.lruBufferList.ChooseVictimBuffer()
 		if buff == nil {
 			return nil
 		}
 		buff.assignToBlock(blk)
+		buffMgr.blkBufferMap[blk.HashCode()] = buff
 	}
 	if !buff.IsPinned() {
 		buffMgr.numAvailable -= 1
@@ -162,22 +168,11 @@ func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
 }
 
 func (buffMgr *BufferMgr) findExistingBuffer(blk *file.BlockId) *Buffer {
-	bufferPool := buffMgr.bufferpool
-	for _, buff := range bufferPool {
-		b := buff.Block()
-		if b != nil && b.Equals(blk) {
-			return buff
-		}
-	}
-	return nil
-}
-
-func (buffMgr *BufferMgr) chooseUnpinnedBuffer() *Buffer {
-	bufferpool := buffMgr.bufferpool
-	for _, buff := range bufferpool {
-		if !buff.IsPinned() {
-			return buff
-		}
+	blkBufferMap := buffMgr.blkBufferMap
+	blkUniqKey := blk.HashCode()
+	buff, found := blkBufferMap[blkUniqKey]
+	if found {
+		return buff
 	}
 	return nil
 }

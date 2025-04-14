@@ -40,12 +40,12 @@ func (b *BlockId) ToString() string {
 	return fmt.Sprintf("[file %s, block %d", b.filename, b.blknum)
 }
 
-func (b *BlockId) HashCode() uint32 {
-	hash := fnv.New32a()
+func (b *BlockId) HashCode() uint64 {
+	hash := fnv.New64a()
 	data := []byte(b.ToString())
 	hash.Write(data)
 
-	return hash.Sum32()
+	return hash.Sum64()
 }
 
 const (
@@ -181,9 +181,8 @@ type FileMgr struct {
 }
 
 type RwCnt struct {
-	r  int
-	w  int
-	mu sync.Mutex
+	r int
+	w int
 }
 
 func NewFileMgr(dbDirectoryPath string, blocksize int32) (*FileMgr, error) {
@@ -317,8 +316,6 @@ func (mgr *FileMgr) getFile(filename string) (*os.File, func(), error) {
 }
 
 func (mgr *FileMgr) incRwCnt(rw string) {
-	mgr.rwCnt.mu.Lock()
-	defer mgr.rwCnt.mu.Unlock()
 	switch rw {
 	case "w":
 		mgr.rwCnt.w += 1
