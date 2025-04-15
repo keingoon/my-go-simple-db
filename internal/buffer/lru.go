@@ -1,6 +1,8 @@
 package buffer
 
-import "sync"
+import (
+	"sync"
+)
 
 type LRUBufferItem struct {
 	buff *Buffer
@@ -28,7 +30,9 @@ func NewLRUList(bufferList []*Buffer) *LRUList {
 			head = current
 		}
 		tail = current
-		prev.next = current
+		if prev != nil {
+			prev.next = current
+		}
 
 		prev = current
 	}
@@ -55,13 +59,19 @@ func (lruList *LRUList) moveToTail(item *LRUBufferItem) {
 	prev, next := item.prev, item.next
 	head, tail := lruList.head, lruList.tail
 	if item == tail {
+		// tailなら何もしない
 		return
 	} else if item == head {
+		// headならheadを新しい向き先に変更
 		lruList.head = next
 	} else {
+		// headでもtailでもなければprevとnextを繋ぎ直す
 		prev.next, next.prev = next, prev
 	}
+
+	// tailにぶら下げる
 	tailOld := tail
 	tailOld.next, item.prev = item, tailOld
+	item.next = nil
 	lruList.tail = item
 }

@@ -621,7 +621,7 @@ func TestBufferMgr(t *testing.T) {
 				break
 			}
 			buffPage := buff.Contents()
-			buffPage.SetInt32(0, 1)
+			buffPage.SetInt32(0, int32(i))
 			buffPage.SetStr(int32Size, "record")
 			buff.SetModified(txnum, lsn)
 		}
@@ -997,7 +997,7 @@ func TestBufferMgr(t *testing.T) {
 		}
 	})
 
-	t.Run("tryToPin after (tryToPin and unpin)", func(t *testing.T) {
+	t.Run("tryToPin after tryToPin and unpin", func(t *testing.T) {
 		t.Parallel()
 		const (
 			blocksize = int32(256)
@@ -1014,8 +1014,7 @@ func TestBufferMgr(t *testing.T) {
 		}
 		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 
-		var flushedBlk *file.BlockId
-		var flushedP *file.Page
+		blkList := make([]*file.BlockId, 0)
 		for i := 0; i < 2; i++ {
 			logrec := createLogRec(int32(1), "record")
 			lsn, err := lm.Append(logrec)
@@ -1034,17 +1033,16 @@ func TestBufferMgr(t *testing.T) {
 			if !buff.IsPinned() {
 				t.Errorf("expected IsPinned %v, got %v", true, buff.IsPinned())
 			}
-			if i == 0 {
-				flushedBlk = blk
-				flushedP = buffPage
-				buff.unpin()
-			}
+			blkList = append(blkList, blk)
 		}
 
-		p := file.NewPage(blocksize)
-		fm.Read(flushedBlk, p)
-		if !reflect.DeepEqual(p, flushedP) {
-			t.Errorf("expected tryPin flushed page %v, got %v", *flushedP, *p)
+		for _, blk := range blkList {
+			p := file.NewPage(blocksize)
+			fm.Read(blk, p)
+			emptyP := file.NewPage(blocksize)
+			if !reflect.DeepEqual(p, emptyP) {
+				t.Errorf("expected tryPin blk page %v, got %v", *emptyP, *p)
+			}
 		}
 	})
 

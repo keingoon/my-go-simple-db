@@ -93,7 +93,7 @@ func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int
 		bufferpool[i] = NewBuffer(fm, lm)
 	}
 
-	blkBufferMap := make(map[uint64]*Buffer)
+	blkBufferMap := make(map[uint64]*Buffer, numbuffs)
 	lruBufferList := NewLRUList(bufferpool)
 
 	return &BufferMgr{bufferpool: bufferpool, blkBufferMap: blkBufferMap, lruBufferList: lruBufferList, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
@@ -153,9 +153,14 @@ func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
 	var buff *Buffer
 	buff = buffMgr.findExistingBuffer(blk)
 	if buff == nil {
-		buff = buffMgr.lruBufferList.ChooseVictimBuffer()
+		lruBufferList := buffMgr.lruBufferList
+		buff = lruBufferList.ChooseVictimBuffer()
 		if buff == nil {
 			return nil
+		}
+
+		if buff.blk != nil {
+			buffMgr.blkBufferMap[buff.blk.HashCode()] = nil
 		}
 		buff.assignToBlock(blk)
 		buffMgr.blkBufferMap[blk.HashCode()] = buff
