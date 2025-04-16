@@ -59,6 +59,8 @@ func (logMgr *LogMgr) Iterater() *LogIterator {
 }
 
 func (logMgr *LogMgr) Append(logrec []byte) (int32, error) {
+	logMgr.mu.Lock()
+	defer logMgr.mu.Unlock()
 	logpage := logMgr.logpage
 	boundary := logpage.GetInt32(0)
 	recsize := len(logrec)

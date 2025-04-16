@@ -73,16 +73,91 @@ func (buff *Buffer) unpin() {
 	buff.pins -= 1
 }
 
+type LRUBufferItem struct {
+	buff *Buffer
+	prev *LRUBufferItem
+	next *LRUBufferItem
+}
+
+func NewLRUBufferItem(buff *Buffer, prev *LRUBufferItem, next *LRUBufferItem) *LRUBufferItem {
+	return &LRUBufferItem{buff: buff, prev: prev, next: next}
+}
+
+type LRUList struct {
+	size int32
+	head *LRUBufferItem
+	tail *LRUBufferItem
+	mu   sync.Mutex
+}
+
+func NewLRUList(bufferList []*Buffer) *LRUList {
+	size := len(bufferList)
+	var head, tail, prev *LRUBufferItem
+	for _, buff := range bufferList {
+		current := NewLRUBufferItem(buff, prev, nil)
+		if head == nil {
+			head = current
+		}
+		tail = current
+		if prev != nil {
+			prev.next = current
+		}
+
+		prev = current
+	}
+	return &LRUList{size: int32(size), head: head, tail: tail}
+}
+
+func (lruList *LRUList) ChooseVictimBuffer() *Buffer {
+	head := lruList.head
+	var item = head
+	for item != nil {
+		buff := item.buff
+		if !buff.IsPinned() {
+			lruList.moveToTail(item)
+			return buff
+		}
+		item = item.next
+	}
+	return nil
+}
+
+func (lruList *LRUList) moveToTail(item *LRUBufferItem) {
+	lruList.mu.Lock()
+	defer lruList.mu.Unlock()
+	prev, next := item.prev, item.next
+	head, tail := lruList.head, lruList.tail
+	if item == tail {
+		// tailなら何もしない
+		return
+	} else if item == head {
+		// headならheadを新しい向き先に変更
+		next.prev = nil
+		lruList.head = next
+	} else {
+		// headでもtailでもなければprevとnextを繋ぎ直す
+		prev.next, next.prev = next, prev
+	}
+
+	// tailにぶら下げる
+	tailOld := tail
+	tailOld.next, item.prev = item, tailOld
+	item.next = nil
+	lruList.tail = item
+}
+
 type waitToken struct{}
 
 const Maxtime = 10000
 
 type BufferMgr struct {
-	bufferpool   []*Buffer
-	numAvailable int32
-	Maxtime      int64
-	mu           sync.Mutex
-	waitCh       chan *waitToken
+	bufferpool    []*Buffer
+	blkBufferMap  map[uint64]*Buffer
+	lruBufferList *LRUList
+	numAvailable  int32
+	Maxtime       int64
+	mu            sync.Mutex
+	waitCh        chan *waitToken
 }
 
 func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int32) *BufferMgr {
@@ -91,7 +166,10 @@ func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int
 		bufferpool[i] = NewBuffer(fm, lm)
 	}
 
-	return &BufferMgr{bufferpool: bufferpool, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
+	blkBufferMap := make(map[uint64]*Buffer, numbuffs)
+	lruBufferList := NewLRUList(bufferpool)
+
+	return &BufferMgr{bufferpool: bufferpool, blkBufferMap: blkBufferMap, lruBufferList: lruBufferList, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
 }
 
 func (buffMgr *BufferMgr) Available() int32 {
@@ -148,11 +226,17 @@ func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
 	var buff *Buffer
 	buff = buffMgr.findExistingBuffer(blk)
 	if buff == nil {
-		buff = buffMgr.chooseUnpinnedBuffer()
+		lruBufferList := buffMgr.lruBufferList
+		buff = lruBufferList.ChooseVictimBuffer()
 		if buff == nil {
 			return nil
 		}
+
+		if buff.blk != nil {
+			buffMgr.blkBufferMap[buff.blk.HashCode()] = nil
+		}
 		buff.assignToBlock(blk)
+		buffMgr.blkBufferMap[blk.HashCode()] = buff
 	}
 	if !buff.IsPinned() {
 		buffMgr.numAvailable -= 1
@@ -162,22 +246,11 @@ func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
 }
 
 func (buffMgr *BufferMgr) findExistingBuffer(blk *file.BlockId) *Buffer {
-	bufferPool := buffMgr.bufferpool
-	for _, buff := range bufferPool {
-		b := buff.Block()
-		if b != nil && b.Equals(blk) {
-			return buff
-		}
-	}
-	return nil
-}
-
-func (buffMgr *BufferMgr) chooseUnpinnedBuffer() *Buffer {
-	bufferpool := buffMgr.bufferpool
-	for _, buff := range bufferpool {
-		if !buff.IsPinned() {
-			return buff
-		}
+	blkBufferMap := buffMgr.blkBufferMap
+	blkUniqKey := blk.HashCode()
+	buff, found := blkBufferMap[blkUniqKey]
+	if found {
+		return buff
 	}
 	return nil
 }
