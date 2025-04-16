@@ -398,6 +398,269 @@ func TestBuffer(t *testing.T) {
 	})
 }
 
+func TestLRUList(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NewLRUList", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		if lrulist.head.buff != bufferpool[0] {
+			t.Errorf("expected lrulist head buff %v, got %v", bufferpool[0], lrulist.head.buff)
+		}
+
+		if lrulist.head.prev != nil {
+			t.Errorf("expected lrulist head prev %v, got %v", nil, lrulist.head.prev)
+		}
+
+		if lrulist.head.next.buff != bufferpool[1] {
+			t.Errorf("expected lrulist head's next buff %v, got %v", bufferpool[1], lrulist.head.next.buff)
+		}
+
+		if lrulist.head.next.next.buff != bufferpool[2] {
+			t.Errorf("expected lrulist head's next next buff %v, got %v", bufferpool[2], lrulist.head.next.next.buff)
+		}
+
+		if lrulist.tail.buff != bufferpool[2] {
+			t.Errorf("expected lrulist tail buff %v, got %v", bufferpool[2], lrulist.tail.buff)
+		}
+
+		if lrulist.tail.next != nil {
+			t.Errorf("expected lrulist tail next %v, got %v", nil, lrulist.tail.next)
+		}
+
+		if lrulist.tail.prev.buff != bufferpool[1] {
+			t.Errorf("expected lrulist tail prev buff %v, got %v", bufferpool[1], lrulist.tail.prev.buff)
+		}
+
+		if lrulist.tail.prev.prev.buff != bufferpool[0] {
+			t.Errorf("expected lrulist tail prev prev buff %v, got %v", bufferpool[0], lrulist.tail.prev.prev.buff)
+		}
+	})
+
+	t.Run("ChooseVictimBuffer after NewLRUList", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		buff := lrulist.ChooseVictimBuffer()
+		if buff != bufferpool[0] {
+			t.Errorf("expected choose victim buff %v, got %v", bufferpool[0], buff)
+		}
+	})
+
+	t.Run("ChooseVictimBuffer pin 2 times", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		var latestVictimBuff *Buffer
+		for i := 0; i < 2; i++ {
+			buff := lrulist.ChooseVictimBuffer()
+			buff.pin()
+			buff.unpin()
+			latestVictimBuff = buff
+		}
+
+		if latestVictimBuff != bufferpool[1] {
+			t.Errorf("expected choose victim buff %v, got %v", bufferpool[1], latestVictimBuff)
+		}
+	})
+
+	t.Run("moveToTail head item", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		lrulist.moveToTail(lrulist.head)
+
+		if lrulist.head.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist head buff %v, got %v", bufferpool[1], lrulist.head.buff)
+		}
+
+		if lrulist.head.prev != nil {
+			t.Errorf("expected new lrulist head prev %v, got %v", nil, lrulist.head.prev)
+		}
+
+		if lrulist.head.next.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist head's next buff %v, got %v", bufferpool[2], lrulist.head.next.buff)
+		}
+
+		if lrulist.head.next.next.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist head's next next buff %v, got %v", bufferpool[0], lrulist.head.next.next.buff)
+		}
+
+		if lrulist.tail.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist tail buff %v, got %v", bufferpool[0], lrulist.tail.buff)
+		}
+
+		if lrulist.tail.next != nil {
+			t.Errorf("expected new lrulist tail next %v, got %v", nil, lrulist.tail.next)
+		}
+
+		if lrulist.tail.prev.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist tail prev buff %v, got %v", bufferpool[2], lrulist.tail.prev.buff)
+		}
+
+		if lrulist.tail.prev.prev.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist tail prev prev buff %v, got %v", bufferpool[1], lrulist.tail.prev.prev.buff)
+		}
+	})
+
+	t.Run("moveToTail tail item", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		lrulist.moveToTail(lrulist.tail)
+
+		if lrulist.head.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist head buff %v, got %v", bufferpool[0], lrulist.head.buff)
+		}
+
+		if lrulist.head.prev != nil {
+			t.Errorf("expected new lrulist head prev %v, got %v", nil, lrulist.head.prev)
+		}
+
+		if lrulist.head.next.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist head's next buff %v, got %v", bufferpool[1], lrulist.head.next.buff)
+		}
+
+		if lrulist.head.next.next.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist head's next next buff %v, got %v", bufferpool[2], lrulist.head.next.next.buff)
+		}
+
+		if lrulist.tail.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist tail buff %v, got %v", bufferpool[2], lrulist.tail.buff)
+		}
+
+		if lrulist.tail.next != nil {
+			t.Errorf("expected new lrulist tail next %v, got %v", nil, lrulist.tail.next)
+		}
+
+		if lrulist.tail.prev.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist tail prev buff %v, got %v", bufferpool[1], lrulist.tail.prev.buff)
+		}
+
+		if lrulist.tail.prev.prev.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist tail prev prev buff %v, got %v", bufferpool[0], lrulist.tail.prev.prev.buff)
+		}
+	})
+
+	t.Run("moveToTail head nor tail item", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			numbuffs  = 3
+			numwaits  = 3
+		)
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		bufferpool := bufferMgr.bufferpool
+
+		lrulist := NewLRUList(bufferpool)
+		lrulist.moveToTail(lrulist.head.next)
+
+		if lrulist.head.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist head buff %v, got %v", bufferpool[0], lrulist.head.buff)
+		}
+
+		if lrulist.head.prev != nil {
+			t.Errorf("expected new lrulist head prev %v, got %v", nil, lrulist.head.prev)
+		}
+
+		if lrulist.head.next.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist head's next buff %v, got %v", bufferpool[2], lrulist.head.next.buff)
+		}
+
+		if lrulist.head.next.next.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist head's next next buff %v, got %v", bufferpool[1], lrulist.head.next.next.buff)
+		}
+
+		if lrulist.tail.buff != bufferpool[1] {
+			t.Errorf("expected new lrulist tail buff %v, got %v", bufferpool[1], lrulist.tail.buff)
+		}
+
+		if lrulist.tail.next != nil {
+			t.Errorf("expected new lrulist tail next %v, got %v", nil, lrulist.tail.next)
+		}
+
+		if lrulist.tail.prev.buff != bufferpool[2] {
+			t.Errorf("expected new lrulist tail prev buff %v, got %v", bufferpool[2], lrulist.tail.prev.buff)
+		}
+
+		if lrulist.tail.prev.prev.buff != bufferpool[0] {
+			t.Errorf("expected new lrulist tail prev prev buff %v, got %v", bufferpool[0], lrulist.tail.prev.prev.buff)
+		}
+	})
+}
+
 func TestBufferMgr(t *testing.T) {
 	t.Parallel()
 

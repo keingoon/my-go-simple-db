@@ -181,8 +181,9 @@ type FileMgr struct {
 }
 
 type RwCnt struct {
-	r int
-	w int
+	r  int
+	w  int
+	mu sync.Mutex
 }
 
 func NewFileMgr(dbDirectoryPath string, blocksize int32) (*FileMgr, error) {
@@ -316,6 +317,8 @@ func (mgr *FileMgr) getFile(filename string) (*os.File, func(), error) {
 }
 
 func (mgr *FileMgr) incRwCnt(rw string) {
+	mgr.rwCnt.mu.Lock()
+	defer mgr.rwCnt.mu.Unlock()
 	switch rw {
 	case "w":
 		mgr.rwCnt.w += 1
