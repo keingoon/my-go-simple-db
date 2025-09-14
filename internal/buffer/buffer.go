@@ -154,9 +154,11 @@ type BufferMgr struct {
 	bufferpool    []*Buffer
 	blkBufferMap  map[uint64]*Buffer
 	lruBufferList *LRUList
+	numBuffs      int32
 	numAvailable  int32
 	Maxtime       int64
 	mu            sync.Mutex
+	numWaits      int32
 	waitCh        chan *waitToken
 }
 
@@ -169,7 +171,7 @@ func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int
 	blkBufferMap := make(map[uint64]*Buffer, numbuffs)
 	lruBufferList := NewLRUList(bufferpool)
 
-	return &BufferMgr{bufferpool: bufferpool, blkBufferMap: blkBufferMap, lruBufferList: lruBufferList, numAvailable: numbuffs, Maxtime: Maxtime, waitCh: make(chan *waitToken, numwaits)}
+	return &BufferMgr{bufferpool: bufferpool, blkBufferMap: blkBufferMap, lruBufferList: lruBufferList, numBuffs: numbuffs, numAvailable: numbuffs, Maxtime: Maxtime, numWaits: numwaits, waitCh: make(chan *waitToken, numwaits)}
 }
 
 func (buffMgr *BufferMgr) Available() int32 {
@@ -193,8 +195,9 @@ func (buffMgr *BufferMgr) Unpin(ctx context.Context, buff *Buffer) {
 	buff.unpin()
 	if !buff.IsPinned() {
 		buffMgr.numAvailable += 1
-		// TODO: UnpinがPinよりcall数を超過した時のgoroutine deadlock考慮する
-		buffMgr.waitCh <- &waitToken{}
+		// INFO: bloadcastしてpin待ちgoroutineを起こす
+		close(buffMgr.waitCh)
+		buffMgr.waitCh = make(chan *waitToken, buffMgr.numWaits)
 	}
 	buffMgr.mu.Unlock()
 }

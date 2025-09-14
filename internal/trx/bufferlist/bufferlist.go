@@ -39,11 +39,19 @@ func (bl *BufferList) Pin(ctx context.Context, blk *file.BlockId) error {
 
 func (bl *BufferList) Unpin(ctx context.Context, blk *file.BlockId) {
 	buff := bl.buffers[blk]
+	// INFO: unpinするblkが存在しない場合は処理を行わない
+	if buff == nil {
+		return
+	}
 	bl.bm.Unpin(ctx, buff)
 
-	bl.pins = slices.DeleteFunc(bl.pins, func(pinnedBlk *file.BlockId) bool {
-		return pinnedBlk == blk
-	})
+	// 最初の1つだけを削除
+	for i, pinnedBlk := range bl.pins {
+		if pinnedBlk == blk {
+			bl.pins = slices.Delete(bl.pins, i, i+1)
+			break
+		}
+	}
 
 	if !slices.Contains(bl.pins, blk) {
 		delete(bl.buffers, blk)
