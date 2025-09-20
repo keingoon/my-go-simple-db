@@ -12,12 +12,11 @@ import (
 )
 
 const (
-	maxtime          = 10000
-	shardNum         = 128
-	wLockedMask      = 1 // 1: write locked, 0: not locked
-	readerCountMask  = 1<<31 - 1
-	readerCountShift = 1
-	maxSpinCount     = 30
+	maxtime         = 10000
+	shardNum        = 128
+	wLockedMask     = int32(^(1<<31 - 1))
+	readerCountMask = int32(1<<31 - 1) // last 31bits are reader count
+	maxSpinCount    = 30
 )
 
 type LockMode int8
@@ -27,25 +26,25 @@ const (
 	WriteMode
 )
 
-type Waiter struct {
+type waiter struct {
 	ch         chan struct{}
 	mode       LockMode
 	upgrade    bool
-	prev, next *Waiter
+	prev, next *waiter
 }
 
-func newWaiter(mode LockMode, upgrade bool) *Waiter {
-	return &Waiter{ch: make(chan struct{}), mode: mode, upgrade: upgrade, prev: nil, next: nil}
+func newWaiter(mode LockMode, upgrade bool) *waiter {
+	return &waiter{ch: make(chan struct{}), mode: mode, upgrade: upgrade, prev: nil, next: nil}
 }
 
 type lockShard struct {
-	state       int32
-	rHead       *Waiter
-	rTail       *Waiter
-	wHead       *Waiter
-	wTail       *Waiter
-	upgradeHead *Waiter
-	upgradeTail *Waiter
+	state       int32 // first 1bit is write/read flag, last 31bits are reader count
+	rHead       *waiter
+	rTail       *waiter
+	wHead       *waiter
+	wTail       *waiter
+	upgradeHead *waiter
+	upgradeTail *waiter
 	mu          sync.Mutex
 }
 
@@ -53,7 +52,7 @@ func newLockShard() *lockShard {
 	return &lockShard{state: 0, rHead: nil, rTail: nil, wHead: nil, wTail: nil, upgradeHead: nil, upgradeTail: nil}
 }
 
-func (shard *lockShard) pushBackRead(w *Waiter) {
+func (shard *lockShard) enqueueRead(w *waiter) {
 	if shard.rTail == nil {
 		shard.rHead = w
 		shard.rTail = w
@@ -64,7 +63,7 @@ func (shard *lockShard) pushBackRead(w *Waiter) {
 	}
 }
 
-func (shard *lockShard) pushBackWrite(w *Waiter) {
+func (shard *lockShard) enqueueWrite(w *waiter) {
 	if shard.wTail == nil {
 		shard.wHead = w
 		shard.wTail = w
@@ -75,7 +74,7 @@ func (shard *lockShard) pushBackWrite(w *Waiter) {
 	}
 }
 
-func (shard *lockShard) pushBackUpgrade(w *Waiter) {
+func (shard *lockShard) enqueueUpgrade(w *waiter) {
 	if shard.upgradeTail == nil {
 		shard.upgradeHead = w
 		shard.upgradeTail = w
@@ -86,7 +85,7 @@ func (shard *lockShard) pushBackUpgrade(w *Waiter) {
 	}
 }
 
-func (shard *lockShard) removeReadWaiter(w *Waiter) {
+func (shard *lockShard) dequeueRead(w *waiter) {
 	if w.prev != nil {
 		w.prev.next = w.next
 	} else {
@@ -100,7 +99,7 @@ func (shard *lockShard) removeReadWaiter(w *Waiter) {
 	w.prev, w.next = nil, nil
 }
 
-func (shard *lockShard) removeWriteWaiter(w *Waiter) {
+func (shard *lockShard) dequeueWrite(w *waiter) {
 	if w.prev != nil {
 		w.prev.next = w.next
 	} else {
@@ -114,7 +113,7 @@ func (shard *lockShard) removeWriteWaiter(w *Waiter) {
 	w.prev, w.next = nil, nil
 }
 
-func (shard *lockShard) removeUpgradeWaiter(w *Waiter) {
+func (shard *lockShard) dequeueUpgrade(w *waiter) {
 	if w.prev != nil {
 		w.prev.next = w.next
 	} else {
@@ -128,35 +127,35 @@ func (shard *lockShard) removeUpgradeWaiter(w *Waiter) {
 	w.prev, w.next = nil, nil
 }
 
-func (shard *lockShard) wakeAllReadWaiters() []*Waiter {
-	rWaiters := make([]*Waiter, 0)
+func (shard *lockShard) wakeAllReadWaiters() []*waiter {
+	rWaiters := make([]*waiter, 0)
 	for rw := shard.rHead; rw != nil; {
 		next := rw.next
 		close(rw.ch)
-		shard.removeReadWaiter(rw)
+		shard.dequeueRead(rw)
 		rWaiters = append(rWaiters, rw)
 		rw = next
 	}
 	return rWaiters
 }
 
-func (shard *lockShard) wakeWriteWaiter() *Waiter {
+func (shard *lockShard) wakeWriteWaiter() *waiter {
 	writeWaiter := shard.wHead
 	if writeWaiter == nil {
 		return nil
 	}
 	close(writeWaiter.ch)
-	shard.removeWriteWaiter(writeWaiter)
+	shard.dequeueWrite(writeWaiter)
 	return writeWaiter
 }
 
-func (shard *lockShard) wakeUpgradeWaiter() *Waiter {
+func (shard *lockShard) wakeUpgradeWaiter() *waiter {
 	upgradeWaiter := shard.upgradeHead
 	if upgradeWaiter == nil {
 		return nil
 	}
 	close(upgradeWaiter.ch)
-	shard.removeUpgradeWaiter(upgradeWaiter)
+	shard.dequeueUpgrade(upgradeWaiter)
 	return upgradeWaiter
 }
 
@@ -177,7 +176,7 @@ func NewLockTable() *LockTable {
 
 func (locktbl *LockTable) getShard(blk *file.BlockId) *lockShard {
 	h := fnvHash(blk.ToString())
-	shardIndex := int32(h) % locktbl.shardNum
+	shardIndex := int32(h % uint32(locktbl.shardNum))
 	shard := locktbl.shards[shardIndex]
 	return shard
 }
@@ -188,8 +187,8 @@ func fnvHash(s string) uint32 {
 	return h.Sum32()
 }
 
-func (locktbl *LockTable) SLock(ctx context.Context, blk *file.BlockId, rwaiter *Waiter) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(locktbl.maxtime))
+func (locktbl *LockTable) SLock(ctx context.Context, blk *file.BlockId, rwaiter *waiter) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(locktbl.maxtime)*time.Millisecond)
 	defer cancel()
 
 	lockShard := locktbl.getShard(blk)
@@ -204,10 +203,10 @@ func (locktbl *LockTable) SLock(ctx context.Context, blk *file.BlockId, rwaiter 
 			default:
 			}
 			old := atomic.LoadInt32(&lockShard.state)
-			if old&wLockedMask == 1 {
+			if (old & wLockedMask) != 0 {
 				continue
 			}
-			new := old + (1 << readerCountShift)
+			new := old + 1
 			if atomic.CompareAndSwapInt32(&lockShard.state, old, new) {
 				return nil
 			}
@@ -220,16 +219,16 @@ func (locktbl *LockTable) SLock(ctx context.Context, blk *file.BlockId, rwaiter 
 	}
 }
 
-func (locktbl *LockTable) slowSLock(ctx context.Context, blk *file.BlockId, rwaiter *Waiter) error {
+func (locktbl *LockTable) slowSLock(ctx context.Context, blk *file.BlockId, rwaiter *waiter) error {
 	lockShard := locktbl.getShard(blk)
 
 	lockShard.mu.Lock()
-	lockShard.pushBackRead(rwaiter)
+	lockShard.enqueueRead(rwaiter)
 	lockShard.mu.Unlock()
 	select {
 	case <-ctx.Done():
 		lockShard.mu.Lock()
-		lockShard.removeReadWaiter(rwaiter)
+		lockShard.dequeueRead(rwaiter)
 		lockShard.mu.Unlock()
 		return ctx.Err()
 	case <-rwaiter.ch:
@@ -237,8 +236,8 @@ func (locktbl *LockTable) slowSLock(ctx context.Context, blk *file.BlockId, rwai
 	}
 }
 
-func (locktbl *LockTable) XLock(ctx context.Context, blk *file.BlockId, wwaiter *Waiter) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(locktbl.maxtime))
+func (locktbl *LockTable) XLock(ctx context.Context, blk *file.BlockId, wwaiter *waiter) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(locktbl.maxtime)*time.Millisecond)
 	defer cancel()
 
 	lockShard := locktbl.getShard(blk)
@@ -253,14 +252,15 @@ func (locktbl *LockTable) XLock(ctx context.Context, blk *file.BlockId, wwaiter 
 			default:
 			}
 			old := atomic.LoadInt32(&lockShard.state)
+			locked := old & wLockedMask
 			readers := old & readerCountMask
 			// forbid if (W locked) or (readers > 0 and not (upgrade && readers == 1))
-			if (old&wLockedMask == 1) || (readers > 0 && !(wwaiter.upgrade && readers == 1)) {
+			if (locked != 0) || (readers > 0 && !(wwaiter.upgrade && readers == 1)) {
 				continue
 			}
 			new := old | wLockedMask
 			if wwaiter.upgrade {
-				new -= (1 << readerCountShift)
+				new -= 1
 			}
 			if atomic.CompareAndSwapInt32(&lockShard.state, old, new) {
 				return nil
@@ -274,15 +274,15 @@ func (locktbl *LockTable) XLock(ctx context.Context, blk *file.BlockId, wwaiter 
 	}
 }
 
-func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwaiter *Waiter) error {
+func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwaiter *waiter) error {
 	lockShard := locktbl.getShard(blk)
 
 	lockShard.mu.Lock()
 	if wwaiter.upgrade {
-		// 読みは既に保持済み。待機列から外す必要はない。
-		lockShard.pushBackUpgrade(wwaiter)
+		// Xlockを呼ばれたときにSlockを既に保持しているため、待機列から外す必要はない。
+		lockShard.enqueueUpgrade(wwaiter)
 	} else {
-		lockShard.pushBackWrite(wwaiter)
+		lockShard.enqueueWrite(wwaiter)
 	}
 	lockShard.mu.Unlock()
 
@@ -290,9 +290,9 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 	case <-ctx.Done():
 		lockShard.mu.Lock()
 		if wwaiter.upgrade {
-			lockShard.removeUpgradeWaiter(wwaiter)
+			lockShard.dequeueUpgrade(wwaiter)
 		} else {
-			lockShard.removeWriteWaiter(wwaiter)
+			lockShard.dequeueWrite(wwaiter)
 		}
 		lockShard.mu.Unlock()
 		return ctx.Err()
@@ -304,15 +304,17 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	lockShard := locktbl.getShard(blk)
 	old := atomic.LoadInt32(&lockShard.state)
+
 	var updated int32
-	if old&wLockedMask == 1 {
+	locked := old & wLockedMask
+	if locked != 0 {
 		new := (old &^ wLockedMask)
 		// write中は他がstateを変更しない前提のため、in-place更新
 		atomic.StoreInt32(&lockShard.state, new)
 		updated = new
 	} else {
 		// readしてる時はread数だけatomic減算の戻り値を利用
-		updated = atomic.AddInt32(&lockShard.state, -(1 << readerCountShift))
+		updated = atomic.AddInt32(&lockShard.state, -1)
 	}
 
 	lockShard.mu.Lock()
@@ -321,7 +323,8 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	// - readers==1 かつ upgrade待機がある場合は upgrade を優先的に付与
 	// - readers==0 の場合は upgrade → write → read の順
 	// - readers>=1 でも writer/upgrade がいなければ read は起こしてよい（スループット重視）
-	if updated&wLockedMask == 0 {
+	locked = updated & wLockedMask
+	if locked == 0 {
 		readers := updated & readerCountMask
 		if readers == 1 && lockShard.upgradeHead != nil {
 			lockShard.wakeUpgradeWaiter()
@@ -344,13 +347,13 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 var LockTbl = NewLockTable()
 
 type concurrencyShard struct {
-	locks map[*file.BlockId]*Waiter
+	locks map[*file.BlockId]*waiter
 	mu    sync.RWMutex
 }
 
 func newConcurrencyShard() *concurrencyShard {
 	return &concurrencyShard{
-		locks: make(map[*file.BlockId]*Waiter),
+		locks: make(map[*file.BlockId]*waiter),
 	}
 }
 
@@ -372,7 +375,7 @@ func NewConcurrencyMgr() *ConcurrencyMgr {
 
 func (conMgr *ConcurrencyMgr) getShard(blk *file.BlockId) *concurrencyShard {
 	h := fnvHash(blk.ToString())
-	shardIndex := int32(h) % conMgr.shardNum
+	shardIndex := int32(h % uint32(conMgr.shardNum))
 	return conMgr.shards[shardIndex]
 }
 
