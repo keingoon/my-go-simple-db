@@ -43,7 +43,7 @@ func TestLockTable(t *testing.T) {
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
-		rwaiter := newWaiter(ReadMode, false)
+		rwaiter := newWaiter(readMode, false)
 
 		err := lt.SLock(ctx, blk, rwaiter)
 		if err != nil {
@@ -75,7 +75,7 @@ func TestLockTable(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				rwaiter := newWaiter(ReadMode, false)
+				rwaiter := newWaiter(readMode, false)
 				if err := lt.SLock(ctx, blk, rwaiter); err != nil {
 					errors <- err
 				}
@@ -106,7 +106,7 @@ func TestLockTable(t *testing.T) {
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
-		wwaiter := newWaiter(WriteMode, false)
+		wwaiter := newWaiter(writeMode, false)
 
 		err := lt.XLock(ctx, blk, wwaiter)
 		if err != nil {
@@ -130,14 +130,14 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire write lock
-		wwaiter := newWaiter(WriteMode, false)
+		wwaiter := newWaiter(writeMode, false)
 		err := lt.XLock(context.Background(), blk, wwaiter)
 		if err != nil {
 			t.Fatalf("XLock failed: %v", err)
 		}
 
 		// Try to acquire read lock (should timeout)
-		rwaiter := newWaiter(ReadMode, false)
+		rwaiter := newWaiter(readMode, false)
 		err = lt.SLock(ctx, blk, rwaiter)
 		if err == nil {
 			t.Error("Expected SLock to timeout, but it succeeded")
@@ -153,14 +153,14 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire read lock
-		rwaiter := newWaiter(ReadMode, false)
+		rwaiter := newWaiter(readMode, false)
 		err := lt.SLock(context.Background(), blk, rwaiter)
 		if err != nil {
 			t.Fatalf("SLock failed: %v", err)
 		}
 
 		// Try to acquire write lock (should timeout)
-		wwaiter := newWaiter(WriteMode, false)
+		wwaiter := newWaiter(writeMode, false)
 		err = lt.XLock(ctx, blk, wwaiter)
 		if err == nil {
 			t.Error("Expected XLock to timeout, but it succeeded")
@@ -175,7 +175,7 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire read lock
-		rwaiter := newWaiter(ReadMode, false)
+		rwaiter := newWaiter(readMode, false)
 		err := lt.SLock(ctx, blk, rwaiter)
 		if err != nil {
 			t.Fatalf("SLock failed: %v", err)
@@ -203,7 +203,7 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire write lock
-		wwaiter := newWaiter(WriteMode, false)
+		wwaiter := newWaiter(writeMode, false)
 		err := lt.XLock(ctx, blk, wwaiter)
 		if err != nil {
 			t.Fatalf("XLock failed: %v", err)
@@ -230,7 +230,7 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire write lock
-		wwaiter := newWaiter(WriteMode, false)
+		wwaiter := newWaiter(writeMode, false)
 		err := lt.XLock(context.Background(), blk, wwaiter)
 		if err != nil {
 			t.Fatalf("XLock failed: %v", err)
@@ -241,7 +241,7 @@ func TestLockTable(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			rwaiter := newWaiter(ReadMode, false)
+			rwaiter := newWaiter(readMode, false)
 			// slowSLockが呼ばれる想定
 			err := lt.SLock(context.Background(), blk, rwaiter)
 			if err != nil {
@@ -269,7 +269,7 @@ func TestLockTable(t *testing.T) {
 		blk := file.NewBlockId("testfile", 0)
 
 		// Acquire read lock
-		rwaiter := newWaiter(ReadMode, false)
+		rwaiter := newWaiter(readMode, false)
 		err := lt.SLock(context.Background(), blk, rwaiter)
 		if err != nil {
 			t.Fatalf("SLock failed: %v", err)
@@ -280,7 +280,7 @@ func TestLockTable(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			wwaiter := newWaiter(WriteMode, false)
+			wwaiter := newWaiter(writeMode, false)
 			// slowXLockが呼ばれる想定
 			err := lt.XLock(context.Background(), blk, wwaiter)
 			if err != nil {
@@ -299,6 +299,74 @@ func TestLockTable(t *testing.T) {
 
 		// Wait for writer to complete
 		wg.Wait()
+	})
+
+	// Upgrade tests
+	t.Run("SLock to XLock upgrade", func(t *testing.T) {
+		t.Parallel()
+
+		lt := NewLockTable()
+		ctx := context.Background()
+		blk := file.NewBlockId("testfile", 0)
+
+		// First acquire read lock
+		rwaiter := newWaiter(readMode, false)
+		err := lt.SLock(ctx, blk, rwaiter)
+		if err != nil {
+			t.Fatalf("SLock failed: %v", err)
+		}
+
+		// Verify read lock is held
+		shard := lt.getShard(blk)
+		state := atomic.LoadInt32(&shard.state)
+		readers := state & readerCountMask
+		if readers != 1 {
+			t.Errorf("Expected 1 reader before upgrade, got %d", readers)
+		}
+
+		// Now upgrade to write lock
+		wwaiter := newWaiter(writeMode, true) // upgrade = true
+		err = lt.XLock(ctx, blk, wwaiter)
+		if err != nil {
+			t.Fatalf("XLock upgrade failed: %v", err)
+		}
+
+		// Verify write lock is held and reader count is 0
+		state = atomic.LoadInt32(&shard.state)
+		if state&wLockedMask == 0 {
+			t.Error("Expected write lock to be set after upgrade")
+		}
+		readers = state & readerCountMask
+		if readers != 0 {
+			t.Errorf("Expected 0 readers after upgrade, got %d", readers)
+		}
+	})
+
+	t.Run("Upgrade blocks other writers", func(t *testing.T) {
+		t.Parallel()
+
+		lt := NewLockTable()
+		blk := file.NewBlockId("testfile", 0)
+
+		// Acquire read lock
+		rwaiter := newWaiter(readMode, false)
+		if err := lt.SLock(context.Background(), blk, rwaiter); err != nil {
+			t.Fatalf("SLock failed: %v", err)
+		}
+
+		// Start upgrade in background
+		wwaiter := newWaiter(writeMode, true) // upgrade = true
+		if err := lt.XLock(context.Background(), blk, wwaiter); err != nil {
+			t.Errorf("XLock upgrade failed: %v", err)
+		}
+
+		// Try to acquire another write lock (should timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		wwaiter2 := newWaiter(writeMode, false)
+		if err := lt.XLock(ctx, blk, wwaiter2); err == nil {
+			t.Error("Expected XLock to timeout, but it succeeded")
+		}
 	})
 }
 
@@ -552,6 +620,41 @@ func TestConcurrencyMgr(t *testing.T) {
 		// Unlock verify
 		if err := cm.Release(ctx); err != nil {
 			t.Fatalf("Release failed: %v", err)
+		}
+	})
+
+	t.Run("SLock to XLock upgrade", func(t *testing.T) {
+		t.Parallel()
+
+		cm := NewConcurrencyMgr()
+		ctx := context.Background()
+		blk := file.NewBlockId("testfile", 0)
+
+		// First acquire read lock
+		if err := cm.SLock(ctx, blk); err != nil {
+			t.Fatalf("SLock failed: %v", err)
+		}
+		if !cm.hasSLock(blk) {
+			t.Error("Expected SLock to be held before upgrade")
+		}
+
+		// Upgrade to write lock
+		if err := cm.XLock(ctx, blk); err != nil {
+			t.Fatalf("XLock upgrade failed: %v", err)
+		}
+		if !cm.hasXLock(blk) {
+			t.Error("Expected XLock to be held after upgrade")
+		}
+		if cm.hasSLock(blk) {
+			t.Error("Expected SLock to be released after upgrade")
+		}
+
+		// Release and verify
+		if err := cm.Release(ctx); err != nil {
+			t.Fatalf("Release failed: %v", err)
+		}
+		if cm.hasXLock(blk) {
+			t.Error("Expected XLock to be released")
 		}
 	})
 }

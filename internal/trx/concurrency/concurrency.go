@@ -22,8 +22,8 @@ const (
 type LockMode int8
 
 const (
-	ReadMode LockMode = iota
-	WriteMode
+	readMode LockMode = iota
+	writeMode
 )
 
 type waiter struct {
@@ -390,7 +390,7 @@ func (conMgr *ConcurrencyMgr) SLock(ctx context.Context, blk *file.BlockId) erro
 	}
 	shard.mu.Unlock()
 
-	rWaiter := newWaiter(ReadMode, false)
+	rWaiter := newWaiter(readMode, false)
 	if err := LockTbl.SLock(ctx, blk, rWaiter); err != nil {
 		return fmt.Errorf("slock abort exception: %w", err)
 	}
@@ -411,7 +411,7 @@ func (conMgr *ConcurrencyMgr) XLock(ctx context.Context, blk *file.BlockId) erro
 	// upgrade 判定のため現在の状態を参照
 	upgrade := conMgr.hasSLock(blk)
 
-	wwaiter := newWaiter(WriteMode, upgrade)
+	wwaiter := newWaiter(writeMode, upgrade)
 	if err := LockTbl.XLock(ctx, blk, wwaiter); err != nil {
 		return fmt.Errorf("xlock abort exception: %w", err)
 	}
@@ -445,7 +445,7 @@ func (conMgr *ConcurrencyMgr) hasSLock(blk *file.BlockId) bool {
 	shard.mu.RLock()
 	waiter := shard.locks[blk]
 	shard.mu.RUnlock()
-	return waiter != nil && waiter.mode == ReadMode
+	return waiter != nil && waiter.mode == readMode
 }
 
 func (conMgr *ConcurrencyMgr) hasXLock(blk *file.BlockId) bool {
@@ -453,5 +453,5 @@ func (conMgr *ConcurrencyMgr) hasXLock(blk *file.BlockId) bool {
 	shard.mu.RLock()
 	waiter := shard.locks[blk]
 	shard.mu.RUnlock()
-	return waiter != nil && waiter.mode == WriteMode
+	return waiter != nil && waiter.mode == writeMode
 }
