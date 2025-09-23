@@ -249,9 +249,6 @@ func TestLockTable(t *testing.T) {
 			}
 		}()
 
-		// Give reader time to start waiting
-		time.Sleep(10 * time.Millisecond)
-
 		// Release write lock
 		err = lt.Unlock(context.Background(), blk)
 		if err != nil {
@@ -287,9 +284,6 @@ func TestLockTable(t *testing.T) {
 				t.Errorf("XLock failed: %v", err)
 			}
 		}()
-
-		// Give writer time to start waiting
-		time.Sleep(10 * time.Millisecond)
 
 		// Release read lock
 		err = lt.Unlock(context.Background(), blk)
@@ -366,6 +360,132 @@ func TestLockTable(t *testing.T) {
 		wwaiter2 := newWaiter(writeMode, false)
 		if err := lt.XLock(ctx, blk, wwaiter2); err == nil {
 			t.Error("Expected XLock to timeout, but it succeeded")
+		}
+	})
+
+	// Wake-up order tests for Unlock
+	t.Run("Unlock wakes write before read (readers==0)", func(t *testing.T) {
+		t.Parallel()
+
+		lt := NewLockTable()
+		blk := file.NewBlockId("testfile", 0)
+
+		// Hold write lock to force others to queue
+		ww := newWaiter(writeMode, false)
+		if err := lt.XLock(context.Background(), blk, ww); err != nil {
+			t.Fatalf("initial XLock failed: %v", err)
+		}
+
+		order := make(chan string, 2)
+
+		// Queue read waiter
+		go func() {
+			if err := lt.SLock(context.Background(), blk, newWaiter(readMode, false)); err == nil {
+				order <- "R"
+			}
+		}()
+
+		// Queue write waiter
+		go func() {
+			if err := lt.XLock(context.Background(), blk, newWaiter(writeMode, false)); err == nil {
+				order <- "W"
+			}
+		}()
+
+		// Unlock writer: readers==0, expect upgrade to wake first
+		if err := lt.Unlock(context.Background(), blk); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+
+		select {
+		case first := <-order:
+			if first != "W" {
+				t.Errorf("expected first wake 'U', got %s", first)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for first wake")
+		}
+	})
+
+	t.Run("Unlock wakes all readers when no writer/upgrade (readers>=1)", func(t *testing.T) {
+		t.Parallel()
+
+		lt := NewLockTable()
+		blk := file.NewBlockId("testfile", 0)
+
+		// Hold write lock to force readers to queue
+		ww := newWaiter(writeMode, false)
+		if err := lt.XLock(context.Background(), blk, ww); err != nil {
+			t.Fatalf("initial XLock failed: %v", err)
+		}
+
+		order := make(chan string, 3)
+
+		// Queue multiple readers
+		for i := 0; i < 3; i++ {
+			go func() {
+				if err := lt.SLock(context.Background(), blk, newWaiter(readMode, false)); err == nil {
+					order <- "R"
+				}
+			}()
+		}
+
+		// Unlock writer: expect all readers to be woken
+		if err := lt.Unlock(context.Background(), blk); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+
+		count := 0
+		for count < 3 {
+			select {
+			case <-order:
+				count++
+			case <-time.After(200 * time.Millisecond):
+				t.Fatalf("expected 3 readers to wake, got %d", count)
+			}
+		}
+	})
+
+	t.Run("Unlock by reader wakes upgrade before write (readers==1)", func(t *testing.T) {
+		t.Parallel()
+
+		lt := NewLockTable()
+		blk := file.NewBlockId("testfile", 0)
+
+		// Acquire single read lock
+		rw := newWaiter(readMode, false)
+		if err := lt.SLock(context.Background(), blk, rw); err != nil {
+			t.Fatalf("initial SLock failed: %v", err)
+		}
+
+		order := make(chan string, 1)
+
+		// Queue write waiter while readers==1
+		go func() {
+			if err := lt.XLock(context.Background(), blk, newWaiter(writeMode, false)); err == nil {
+				order <- "W"
+			}
+		}()
+
+		// Queue upgrade waiter while readers==1
+		go func() {
+			if err := lt.XLock(context.Background(), blk, newWaiter(writeMode, true)); err == nil {
+				order <- "U"
+			}
+		}()
+
+		// Unlock the only reader: expect upgrade to be woken
+		if err := lt.Unlock(context.Background(), blk); err != nil {
+			t.Fatalf("Unlock failed: %v", err)
+		}
+
+		select {
+		case first := <-order:
+			if first != "U" {
+				t.Errorf("expected wake 'U', got %s", first)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("timeout waiting for upgrade wake")
 		}
 	})
 }

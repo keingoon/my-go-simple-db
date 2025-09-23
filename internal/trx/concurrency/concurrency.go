@@ -321,21 +321,18 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	// 譲渡ポリシー:
 	// - writeビットが落ちているときのみ誰かを起こす
 	// - readers==1 かつ upgrade待機がある場合は upgrade を優先的に付与
-	// - readers==0 の場合は upgrade → write → read の順
-	// - readers>=1 でも writer/upgrade がいなければ read は起こしてよい（スループット重視）
+	// - readers==0 の場合は write → read の順
+	// - readers>=1 の場合は read を起こす（スループット重視）
 	locked = updated & wLockedMask
 	if locked == 0 {
 		readers := updated & readerCountMask
 		if readers == 1 && lockShard.upgradeHead != nil {
 			lockShard.wakeUpgradeWaiter()
 		} else if readers == 0 {
-			if uw := lockShard.wakeUpgradeWaiter(); uw == nil {
-				if ww := lockShard.wakeWriteWaiter(); ww == nil {
-					lockShard.wakeAllReadWaiters()
-				}
+			if ww := lockShard.wakeWriteWaiter(); ww == nil {
+				lockShard.wakeAllReadWaiters()
 			}
-		} else if lockShard.wHead == nil && lockShard.upgradeHead == nil {
-			// writer/upgrade が不在なら、readを増やしてよい
+		} else {
 			lockShard.wakeAllReadWaiters()
 		}
 	}
