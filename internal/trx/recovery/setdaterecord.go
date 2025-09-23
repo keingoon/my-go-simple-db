@@ -7,6 +7,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 // SetDateRecord represents a SETDATE log record
@@ -47,10 +48,10 @@ func (r *SetDateRecord) String() string {
 	return fmt.Sprintf("<SETDATE %d %s %d %s>", r.txnum, r.blk.ToString(), r.offset, r.val)
 }
 
-func (r *SetDateRecord) Undo(ctx context.Context, tx undoContext) {
-	tx.Pin(ctx, r.blk)
-	tx.SetDate(ctx, r.blk, r.offset, r.val, false) // don't log the undo!
-	tx.Unpin(ctx, r.blk)
+func (r *SetDateRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
+	txAccess.Pin(ctx, r.blk)
+	txAccess.SetDate(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.Unpin(ctx, r.blk)
 }
 
 func WriteSetDateToLog(lm *log.LogMgr, txnum int32, blk *file.BlockId, offset int32, val time.Time) (int32, error) {

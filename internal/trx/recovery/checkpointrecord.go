@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type CheckpointRecord struct{}
@@ -26,7 +27,7 @@ func (r *CheckpointRecord) String() string {
 	return "<CHECKPOINT>"
 }
 
-func (r *CheckpointRecord) Undo(ctx context.Context, tx undoContext) {}
+func (r *CheckpointRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
 
 func WriteCheckpointToLog(lm *log.LogMgr) (int32, error) {
 	rec := make([]byte, int32Size)

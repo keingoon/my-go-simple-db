@@ -7,18 +7,19 @@ import (
 
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type RecoveryMgr struct {
-	lm    *log.LogMgr
-	bm    *buffer.BufferMgr
-	tx    undoContext
-	txnum int32
+	lm       *log.LogMgr
+	bm       *buffer.BufferMgr
+	txAccess *access.Transaction
+	txnum    int32
 }
 
-func NewRecoveryMgr(lm *log.LogMgr, bm *buffer.BufferMgr, tx undoContext, txnum int32) *RecoveryMgr {
+func NewRecoveryMgr(lm *log.LogMgr, bm *buffer.BufferMgr, txAccess *access.Transaction, txnum int32) *RecoveryMgr {
 	WriteStartToLog(lm, txnum)
-	return &RecoveryMgr{lm: lm, bm: bm, tx: tx, txnum: txnum}
+	return &RecoveryMgr{lm: lm, bm: bm, txAccess: txAccess, txnum: txnum}
 }
 
 func (rMgr *RecoveryMgr) Commit(ctx context.Context) error {
@@ -33,7 +34,7 @@ func (rMgr *RecoveryMgr) Commit(ctx context.Context) error {
 }
 
 func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
-	rMgr.doRollback(ctx, rMgr.tx)
+	rMgr.doRollback(ctx)
 	rMgr.bm.FlushAll(ctx, rMgr.txnum)
 	var lsn int32
 	lsn, err := WriteRollbackToLog(rMgr.lm, rMgr.txnum)
@@ -45,7 +46,7 @@ func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
 }
 
 func (rMgr *RecoveryMgr) Recover(ctx context.Context) error {
-	rMgr.doRecover(ctx, rMgr.tx)
+	rMgr.doRecover(ctx)
 	rMgr.bm.FlushAll(ctx, rMgr.txnum)
 	var lsn int32
 	lsn, err := WriteCheckpointToLog(rMgr.lm)
@@ -106,7 +107,7 @@ func (rMgr *RecoveryMgr) SetDate(buff *buffer.Buffer, offset int32, newVal time.
 	return lsn, nil
 }
 
-func (rMgr *RecoveryMgr) doRollback(ctx context.Context, tx undoContext) {
+func (rMgr *RecoveryMgr) doRollback(ctx context.Context) {
 	iter := rMgr.lm.Iterater()
 	for iter.HasNext() {
 		bytes := iter.Next()
@@ -115,12 +116,12 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, tx undoContext) {
 			if rec.Op() == start {
 				return
 			}
-			rec.Undo(ctx, tx)
+			rec.Undo(ctx, rMgr.txAccess)
 		}
 	}
 }
 
-func (rMgr *RecoveryMgr) doRecover(ctx context.Context, tx undoContext) {
+func (rMgr *RecoveryMgr) doRecover(ctx context.Context) {
 	finishedTxs := make(map[int32]bool)
 
 	iter := rMgr.lm.Iterater()
@@ -134,7 +135,7 @@ func (rMgr *RecoveryMgr) doRecover(ctx context.Context, tx undoContext) {
 			finishedTxs[rec.TxNumber()] = true
 		}
 		if _, ok := finishedTxs[rec.TxNumber()]; !ok {
-			rec.Undo(ctx, tx)
+			rec.Undo(ctx, rMgr.txAccess)
 		}
 	}
 }

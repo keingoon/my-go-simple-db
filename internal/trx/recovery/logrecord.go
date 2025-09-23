@@ -4,12 +4,13 @@ import (
 	"context"
 
 	"github.com/keingoon/simpledb/internal/file"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type LogRecord interface {
 	Op() int32
 	TxNumber() int32
-	Undo(ctx context.Context, tx undoContext)
+	Undo(ctx context.Context, txAccess *access.Transaction)
 }
 
 func CreateLogRecord(b []byte) LogRecord {

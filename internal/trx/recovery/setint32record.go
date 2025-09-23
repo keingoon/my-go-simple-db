@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type SetInt32Record struct {
@@ -48,10 +49,10 @@ func (r *SetInt32Record) String() string {
 	return fmt.Sprintf("<SETINT32 %d %s %d %d>", r.txnum, r.blk.ToString(), r.offset, r.val)
 }
 
-func (r *SetInt32Record) Undo(ctx context.Context, tx undoContext) {
-	tx.Pin(ctx, r.blk)
-	tx.SetInt32(ctx, r.blk, r.offset, r.val, false) // don't log the undo!
-	tx.Unpin(ctx, r.blk)
+func (r *SetInt32Record) Undo(ctx context.Context, txAccess *access.Transaction) {
+	txAccess.Pin(ctx, r.blk)
+	txAccess.SetInt32(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.Unpin(ctx, r.blk)
 }
 
 func WriteSetInt32ToLog(lm *log.LogMgr, txnum int32, blk *file.BlockId, offset int32, val int32) (int32, error) {

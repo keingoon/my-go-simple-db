@@ -9,6 +9,7 @@ import (
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 	"github.com/keingoon/simpledb/internal/trx/bufferlist"
 	"github.com/keingoon/simpledb/internal/trx/concurrency"
 	"github.com/keingoon/simpledb/internal/trx/recovery"
@@ -20,167 +21,97 @@ const (
 
 var atomicNextTxNum atomic.Int32
 
-type Transaction struct {
+type TransactionMgr struct {
 	recoveryMgr *recovery.RecoveryMgr
 	concurMgr   *concurrency.ConcurrencyMgr
 	bm          *buffer.BufferMgr
 	fm          *file.FileMgr
 	txnum       int32
 	mybuffers   *bufferlist.BufferList
+	txAccess    *access.Transaction
 }
 
-func NewTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32, mybuffers *bufferlist.BufferList) *Transaction {
-	tx := &Transaction{
-		concurMgr: concurrency.NewConcurrencyMgr(),
-		bm:        bm,
-		fm:        fm,
-		txnum:     txnum,
-		mybuffers: bufferlist.NewBufferList(bm),
+func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32) *TransactionMgr {
+	mybuffers := bufferlist.NewBufferList(bm)
+	txAccess := access.NewTransaction(fm, lm, bm, txnum, mybuffers)
+
+	txmgr := &TransactionMgr{
+		recoveryMgr: recovery.NewRecoveryMgr(lm, bm, txAccess, txnum),
+		concurMgr:   concurrency.NewConcurrencyMgr(),
+		bm:          bm,
+		fm:          fm,
+		txnum:       txnum,
+		mybuffers:   mybuffers,
+		txAccess:    txAccess,
 	}
-	tx.recoveryMgr = recovery.NewRecoveryMgr(lm, bm, tx, txnum)
-	return tx
+	return txmgr
 }
 
-func (tx *Transaction) Commit(ctx context.Context) {
-	tx.recoveryMgr.Commit(ctx)
-	fmt.Println("transaction ", tx.txnum, " commited")
-	tx.concurMgr.Release(ctx)
-	tx.mybuffers.UnpinAll(ctx)
+func (txmgr *TransactionMgr) Commit(ctx context.Context) {
+	txmgr.recoveryMgr.Commit(ctx)
+	fmt.Println("transaction ", txmgr.txnum, " commited")
+	txmgr.concurMgr.Release(ctx)
+	txmgr.mybuffers.UnpinAll(ctx)
 }
 
-func (tx *Transaction) Rollback(ctx context.Context) {
-	tx.recoveryMgr.Rollback(ctx)
-	fmt.Println("transaction ", tx.txnum, " rolled back")
-	tx.concurMgr.Release(ctx)
-	tx.mybuffers.UnpinAll(ctx)
+func (txmgr *TransactionMgr) Rollback(ctx context.Context) {
+	txmgr.recoveryMgr.Rollback(ctx)
+	fmt.Println("transaction ", txmgr.txnum, " rolled back")
+	txmgr.concurMgr.Release(ctx)
+	txmgr.mybuffers.UnpinAll(ctx)
 }
 
-func (tx *Transaction) Recover(ctx context.Context) {
-	tx.bm.FlushAll(ctx, tx.txnum)
-	tx.recoveryMgr.Recover(ctx)
+func (txmgr *TransactionMgr) Recover(ctx context.Context) {
+	txmgr.bm.FlushAll(ctx, txmgr.txnum)
+	txmgr.recoveryMgr.Recover(ctx)
 }
 
-func (tx *Transaction) Pin(ctx context.Context, blk *file.BlockId) {
-	tx.mybuffers.Pin(ctx, blk)
+func (txmgr *TransactionMgr) Pin(ctx context.Context, blk *file.BlockId) {
+	txmgr.txAccess.Pin(ctx, blk)
 }
 
-func (tx *Transaction) Unpin(ctx context.Context, blk *file.BlockId) {
-	tx.mybuffers.Unpin(ctx, blk)
+func (txmgr *TransactionMgr) Unpin(ctx context.Context, blk *file.BlockId) {
+	txmgr.txAccess.Unpin(ctx, blk)
 }
 
-func (tx *Transaction) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) int16 {
-	tx.concurMgr.SLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	return buff.Contents().GetInt16(offset)
+func (txmgr *TransactionMgr) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) int16 {
+	return txmgr.txAccess.GetInt16(ctx, blk, offset)
 }
 
-func (tx *Transaction) GetInt32(ctx context.Context, blk *file.BlockId, offset int32) int32 {
-	tx.concurMgr.SLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	return buff.Contents().GetInt32(offset)
+func (txmgr *TransactionMgr) GetInt32(ctx context.Context, blk *file.BlockId, offset int32) int32 {
+	return txmgr.txAccess.GetInt32(ctx, blk, offset)
 }
 
-func (tx *Transaction) GetStr(ctx context.Context, blk *file.BlockId, offset int32) string {
-	tx.concurMgr.SLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	return buff.Contents().GetStr(offset)
+func (txmgr *TransactionMgr) GetStr(ctx context.Context, blk *file.BlockId, offset int32) string {
+	return txmgr.txAccess.GetStr(ctx, blk, offset)
 }
 
-func (tx *Transaction) GetBool(ctx context.Context, blk *file.BlockId, offset int32) bool {
-	tx.concurMgr.SLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	return buff.Contents().GetBool(offset)
+func (txmgr *TransactionMgr) GetBool(ctx context.Context, blk *file.BlockId, offset int32) bool {
+	return txmgr.txAccess.GetBool(ctx, blk, offset)
 }
 
-func (tx *Transaction) GetDate(ctx context.Context, blk *file.BlockId, offset int32) time.Time {
-	tx.concurMgr.SLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	return buff.Contents().GetDate(offset)
+func (txmgr *TransactionMgr) GetDate(ctx context.Context, blk *file.BlockId, offset int32) time.Time {
+	return txmgr.txAccess.GetDate(ctx, blk, offset)
 }
 
-func (tx *Transaction) SetInt16(ctx context.Context, blk *file.BlockId, offset int32, val int16, okToLog bool) error {
-	tx.concurMgr.XLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	var lsn = int32(-1)
-	if okToLog {
-		loglsn, err := tx.recoveryMgr.SetInt16(buff, offset, val)
-		if err != nil {
-			return fmt.Errorf("trx could not setint16: %w", err)
-		}
-		lsn = loglsn
-	}
-	p := buff.Contents()
-	p.SetInt16(offset, val)
-	buff.SetModified(tx.txnum, lsn)
-	return nil
+func (txmgr *TransactionMgr) SetInt16(ctx context.Context, blk *file.BlockId, offset int32, val int16, okToLog bool) error {
+	return txmgr.txAccess.SetInt16(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetInt16)
 }
 
-func (tx *Transaction) SetInt32(ctx context.Context, blk *file.BlockId, offset int32, val int32, okTolog bool) error {
-	tx.concurMgr.XLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	var lsn = int32(-1)
-	if okTolog {
-		loglsn, err := tx.recoveryMgr.SetInt32(buff, offset, val)
-		if err != nil {
-			return fmt.Errorf("trx could not setint32: %w", err)
-		}
-		lsn = loglsn
-	}
-	p := buff.Contents()
-	p.SetInt32(offset, val)
-	buff.SetModified(tx.txnum, int32(lsn))
-	return nil
+func (txmgr *TransactionMgr) SetInt32(ctx context.Context, blk *file.BlockId, offset int32, val int32, okToLog bool) error {
+	return txmgr.txAccess.SetInt32(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetInt32)
 }
 
-func (tx *Transaction) SetStr(ctx context.Context, blk *file.BlockId, offset int32, val string, okTolog bool) error {
-	tx.concurMgr.XLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	var lsn = int32(-1)
-	if okTolog {
-		loglsn, err := tx.recoveryMgr.SetStr(buff, offset, val)
-		if err != nil {
-			return fmt.Errorf("trx could not setstr: %w", err)
-		}
-		lsn = loglsn
-	}
-	p := buff.Contents()
-	p.SetStr(offset, val)
-	buff.SetModified(tx.txnum, int32(lsn))
-	return nil
+func (txmgr *TransactionMgr) SetStr(ctx context.Context, blk *file.BlockId, offset int32, val string, okToLog bool) error {
+	return txmgr.txAccess.SetStr(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetStr)
 }
 
-func (tx *Transaction) SetBool(ctx context.Context, blk *file.BlockId, offset int32, val bool, okTolog bool) error {
-	tx.concurMgr.XLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	var lsn = int32(-1)
-	if okTolog {
-		loglsn, err := tx.recoveryMgr.SetBool(buff, offset, val)
-		if err != nil {
-			return fmt.Errorf("trx could not setbool: %w", err)
-		}
-		lsn = loglsn
-	}
-	p := buff.Contents()
-	p.SetBool(offset, val)
-	buff.SetModified(tx.txnum, int32(lsn))
-	return nil
+func (txmgr *TransactionMgr) SetBool(ctx context.Context, blk *file.BlockId, offset int32, val bool, okToLog bool) error {
+	return txmgr.txAccess.SetBool(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetBool)
 }
 
-func (tx *Transaction) SetDate(ctx context.Context, blk *file.BlockId, offset int32, val time.Time, okTolog bool) error {
-	tx.concurMgr.XLock(ctx, blk)
-	buff := tx.mybuffers.GetBuffer(blk)
-	var lsn = int32(-1)
-	if okTolog {
-		loglsn, err := tx.recoveryMgr.SetDate(buff, offset, val)
-		if err != nil {
-			return fmt.Errorf("trx could not setdate: %w", err)
-		}
-		lsn = loglsn
-	}
-	p := buff.Contents()
-	p.SetDate(offset, val)
-	buff.SetModified(tx.txnum, int32(lsn))
-	return nil
+func (txmgr *TransactionMgr) SetDate(ctx context.Context, blk *file.BlockId, offset int32, val time.Time, okToLog bool) error {
+	return txmgr.txAccess.SetDate(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetDate)
 }
 
 func NextTxNumber() int32 {

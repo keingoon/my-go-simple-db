@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type StartRecord struct {
@@ -33,7 +34,7 @@ func (r *StartRecord) String() string {
 	return fmt.Sprintf("<START %d>", r.txnum)
 }
 
-func (r *StartRecord) Undo(ctx context.Context, tr undoContext) {}
+func (r *StartRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
 
 func WriteStartToLog(lm *log.LogMgr, txnum int32) (int32, error) {
 	tpos := int32Size

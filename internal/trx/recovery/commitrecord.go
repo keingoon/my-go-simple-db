@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type CommitRecord struct {
@@ -33,7 +34,7 @@ func (r *CommitRecord) String() string {
 	return fmt.Sprintf("<COMMIT %d>", r.txnum)
 }
 
-func (r *CommitRecord) Undo(ctx context.Context, tx undoContext) {}
+func (r *CommitRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
 
 func WriteCommitToLog(lm *log.LogMgr, txnum int32) (int32, error) {
 	tpos := int32Size

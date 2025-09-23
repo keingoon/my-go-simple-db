@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type RollbackRecord struct {
@@ -33,7 +34,7 @@ func (r *RollbackRecord) String() string {
 	return fmt.Sprintf("<ROLLBACK %d>", r.txnum)
 }
 
-func (r *RollbackRecord) Undo(ctx context.Context, tx undoContext) {}
+func (r *RollbackRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
 
 func WriteRollbackToLog(lm *log.LogMgr, txnum int32) (int32, error) {
 	tpos := int32Size

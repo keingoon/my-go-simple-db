@@ -6,6 +6,7 @@ import (
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 // SetBoolRecord represents a SETBOOL log record
@@ -45,10 +46,10 @@ func (r *SetBoolRecord) String() string {
 	return fmt.Sprintf("<SETBOOL %d %s %d %t>", r.txnum, r.blk.ToString(), r.offset, r.val)
 }
 
-func (r *SetBoolRecord) Undo(ctx context.Context, tx undoContext) {
-	tx.Pin(ctx, r.blk)
-	tx.SetBool(ctx, r.blk, r.offset, r.val, false) // don't log the undo!
-	tx.Unpin(ctx, r.blk)
+func (r *SetBoolRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
+	txAccess.Pin(ctx, r.blk)
+	txAccess.SetBool(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.Unpin(ctx, r.blk)
 }
 
 func WriteSetBoolToLog(lm *log.LogMgr, txnum int32, blk *file.BlockId, offset int32, val bool) (int32, error) {
