@@ -304,10 +304,11 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	lockShard := locktbl.getShard(blk)
 	old := atomic.LoadInt32(&lockShard.state)
+	prevLocked := old & wLockedMask
+	prevReaders := old & readerCountMask
 
 	var updated int32
-	locked := old & wLockedMask
-	if locked != 0 {
+	if prevLocked != 0 {
 		new := (old &^ wLockedMask)
 		// write中は他がstateを変更しない前提のため、in-place更新
 		atomic.StoreInt32(&lockShard.state, new)
@@ -323,12 +324,15 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	// - readers==1 かつ upgrade待機がある場合は upgrade を優先的に付与
 	// - readers==0 の場合は write → read の順
 	// - readers>=1 の場合は read を起こす（スループット重視）
-	locked = updated & wLockedMask
-	if locked == 0 {
-		readers := updated & readerCountMask
-		if readers == 1 && lockShard.upgradeHead != nil {
+	if updated&wLockedMask == 0 {
+		// 最優先: 直前が単一読者で upgrade 待ちがいる
+		if prevLocked == 0 && prevReaders == 1 && lockShard.upgradeHead != nil {
 			lockShard.wakeUpgradeWaiter()
-		} else if readers == 0 {
+			return nil
+		}
+
+		readers := updated & readerCountMask
+		if readers == 0 {
 			if ww := lockShard.wakeWriteWaiter(); ww == nil {
 				lockShard.wakeAllReadWaiters()
 			}
@@ -344,13 +348,13 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 var LockTbl = NewLockTable()
 
 type concurrencyShard struct {
-	locks map[*file.BlockId]*waiter
+	locks map[file.BlockId]*waiter
 	mu    sync.RWMutex
 }
 
 func newConcurrencyShard() *concurrencyShard {
 	return &concurrencyShard{
-		locks: make(map[*file.BlockId]*waiter),
+		locks: make(map[file.BlockId]*waiter),
 	}
 }
 
@@ -381,7 +385,7 @@ func (conMgr *ConcurrencyMgr) SLock(ctx context.Context, blk *file.BlockId) erro
 
 	// すでに保持している場合は何もしない
 	shard.mu.Lock()
-	if waiter, ok := shard.locks[blk]; ok && waiter != nil {
+	if waiter, ok := shard.locks[*blk]; ok && waiter != nil {
 		shard.mu.Unlock()
 		return nil
 	}
@@ -392,7 +396,7 @@ func (conMgr *ConcurrencyMgr) SLock(ctx context.Context, blk *file.BlockId) erro
 		return fmt.Errorf("slock abort exception: %w", err)
 	}
 	shard.mu.Lock()
-	shard.locks[blk] = rWaiter
+	shard.locks[*blk] = rWaiter
 	shard.mu.Unlock()
 	return nil
 }
@@ -414,7 +418,7 @@ func (conMgr *ConcurrencyMgr) XLock(ctx context.Context, blk *file.BlockId) erro
 	}
 
 	shard.mu.Lock()
-	shard.locks[blk] = wwaiter
+	shard.locks[*blk] = wwaiter
 	shard.mu.Unlock()
 
 	return nil
@@ -426,7 +430,7 @@ func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
 		shard.mu.Lock()
 		for blk := range shard.locks {
 			shard.mu.Unlock()
-			if err := LockTbl.Unlock(ctx, blk); err != nil {
+			if err := LockTbl.Unlock(ctx, &blk); err != nil {
 				return fmt.Errorf("release abort exception: %w", err)
 			}
 			shard.mu.Lock()
@@ -440,7 +444,7 @@ func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
 func (conMgr *ConcurrencyMgr) hasSLock(blk *file.BlockId) bool {
 	shard := conMgr.getShard(blk)
 	shard.mu.RLock()
-	waiter := shard.locks[blk]
+	waiter := shard.locks[*blk]
 	shard.mu.RUnlock()
 	return waiter != nil && waiter.mode == readMode
 }
@@ -448,7 +452,7 @@ func (conMgr *ConcurrencyMgr) hasSLock(blk *file.BlockId) bool {
 func (conMgr *ConcurrencyMgr) hasXLock(blk *file.BlockId) bool {
 	shard := conMgr.getShard(blk)
 	shard.mu.RLock()
-	waiter := shard.locks[blk]
+	waiter := shard.locks[*blk]
 	shard.mu.RUnlock()
 	return waiter != nil && waiter.mode == writeMode
 }

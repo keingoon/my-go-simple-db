@@ -11,11 +11,8 @@ import (
 )
 
 func TestLockTable(t *testing.T) {
-	t.Parallel()
 
 	t.Run("NewLockTable", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 
 		if lt == nil {
@@ -38,8 +35,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("SLock single reader", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -60,8 +55,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("SLock multiple readers", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -101,8 +94,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("XLock single writer", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -122,8 +113,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("XLock blocks readers", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -145,8 +134,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("SLock blocks writers", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
@@ -168,8 +155,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock releases read lock", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -196,8 +181,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock releases write lock", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -224,8 +207,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock wakes waiting readers", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -260,8 +241,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock wakes waiting writer", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -297,8 +276,6 @@ func TestLockTable(t *testing.T) {
 
 	// Upgrade tests
 	t.Run("SLock to XLock upgrade", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -337,8 +314,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Upgrade blocks other writers", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -365,8 +340,6 @@ func TestLockTable(t *testing.T) {
 
 	// Wake-up order tests for Unlock
 	t.Run("Unlock wakes write before read (readers==0)", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -392,6 +365,9 @@ func TestLockTable(t *testing.T) {
 			}
 		}()
 
+		// 10ms sleep to ensure waiters are enqueued
+		time.Sleep(10 * time.Millisecond)
+
 		// Unlock writer: readers==0, expect upgrade to wake first
 		if err := lt.Unlock(context.Background(), blk); err != nil {
 			t.Fatalf("Unlock failed: %v", err)
@@ -400,7 +376,7 @@ func TestLockTable(t *testing.T) {
 		select {
 		case first := <-order:
 			if first != "W" {
-				t.Errorf("expected first wake 'U', got %s", first)
+				t.Errorf("expected first wake 'W', got %s", first)
 			}
 		case <-time.After(100 * time.Millisecond):
 			t.Fatal("timeout waiting for first wake")
@@ -408,8 +384,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock wakes all readers when no writer/upgrade (readers>=1)", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -430,6 +404,9 @@ func TestLockTable(t *testing.T) {
 			}()
 		}
 
+		// 10ms sleep to ensure waiters are enqueued
+		time.Sleep(10 * time.Millisecond)
+
 		// Unlock writer: expect all readers to be woken
 		if err := lt.Unlock(context.Background(), blk); err != nil {
 			t.Fatalf("Unlock failed: %v", err)
@@ -447,8 +424,6 @@ func TestLockTable(t *testing.T) {
 	})
 
 	t.Run("Unlock by reader wakes upgrade before write (readers==1)", func(t *testing.T) {
-		t.Parallel()
-
 		lt := NewLockTable()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -474,6 +449,9 @@ func TestLockTable(t *testing.T) {
 			}
 		}()
 
+		// 10ms sleep to ensure waiters are enqueued
+		time.Sleep(10 * time.Millisecond)
+
 		// Unlock the only reader: expect upgrade to be woken
 		if err := lt.Unlock(context.Background(), blk); err != nil {
 			t.Fatalf("Unlock failed: %v", err)
@@ -491,11 +469,7 @@ func TestLockTable(t *testing.T) {
 }
 
 func TestConcurrencyMgr(t *testing.T) {
-	t.Parallel()
-
 	t.Run("NewConcurrencyMgr", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 
 		if cm == nil {
@@ -518,8 +492,6 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("SLock single block", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -541,8 +513,6 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("XLock single block", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
@@ -564,8 +534,6 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("SLock multiple blocks", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 
@@ -597,8 +565,6 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("XLock multiple blocks", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 
@@ -630,8 +596,6 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("Release all locks", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 
@@ -665,44 +629,46 @@ func TestConcurrencyMgr(t *testing.T) {
 	})
 
 	t.Run("Concurrent SLock operations", func(t *testing.T) {
-		t.Parallel()
-
-		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
 
 		var wg sync.WaitGroup
 		numGoroutines := 5 // Reduced from 10
+		cms := make(chan *ConcurrencyMgr, numGoroutines)
 		errors := make(chan error, numGoroutines)
 
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := cm.SLock(ctx, blk); err != nil {
+				cm := NewConcurrencyMgr()
+				err := cm.SLock(ctx, blk)
+				if err == nil {
+					cms <- cm
+				} else {
 					errors <- err
 				}
 			}()
 		}
 
 		wg.Wait()
+		close(cms)
 		close(errors)
 
 		// Check for errors
 		for err := range errors {
-			t.Errorf("Concurrent SLock failed: %v", err)
+			t.Fatalf("Concurrent SLock failed: %v", err)
 		}
 
 		// Unlock verify
-		if err := cm.Release(ctx); err != nil {
-			t.Fatalf("Release failed: %v", err)
+		for cm := range cms {
+			if err := cm.Release(ctx); err != nil {
+				t.Fatalf("Release failed: %v", err)
+			}
 		}
 	})
 
 	t.Run("Concurrent XLock operations", func(t *testing.T) {
-		t.Parallel()
-
-		cm := NewConcurrencyMgr()
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
@@ -710,42 +676,51 @@ func TestConcurrencyMgr(t *testing.T) {
 
 		var wg sync.WaitGroup
 		numGoroutines := 3 // Reduced from 5
+		cms := make(chan *ConcurrencyMgr, numGoroutines)
 		errors := make(chan error, numGoroutines)
 
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := cm.XLock(ctx, blk); err != nil {
+				cm := NewConcurrencyMgr()
+				err := cm.XLock(ctx, blk)
+				if err == nil {
+					cms <- cm
+				} else {
 					errors <- err
 				}
 			}()
 		}
 
 		wg.Wait()
+		close(cms)
 		close(errors)
 
-		// Should have some timeouts (only one XLock can succeed)
+		// Should have exactly one success and the rest time out
 		timeoutCount := 0
 		for err := range errors {
 			if err != nil {
 				timeoutCount++
 			}
 		}
-
-		if timeoutCount != 0 {
-			t.Errorf("Expected some XLock operations to not timeout, but got %d", timeoutCount)
+		successCount := numGoroutines - timeoutCount
+		if successCount != 1 {
+			t.Errorf("expected exactly one XLock to succeed, got %d", successCount)
+		}
+		if timeoutCount != numGoroutines-1 {
+			t.Errorf("expected %d XLock operations to timeout, got %d", numGoroutines-1, timeoutCount)
 		}
 
 		// Unlock verify
-		if err := cm.Release(ctx); err != nil {
-			t.Fatalf("Release failed: %v", err)
+		for cm := range cms {
+			if err := cm.Release(ctx); err != nil {
+				t.Fatalf("Release failed: %v", err)
+			}
 		}
 	})
 
 	t.Run("SLock to XLock upgrade", func(t *testing.T) {
-		t.Parallel()
-
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
