@@ -58,10 +58,7 @@ func logHasOp(lm *log.LogMgr, op int32) bool {
 }
 
 func TestRecoveryMgr(t *testing.T) {
-	t.Parallel()
-
 	t.Run("NewRecoveryMgr writes START", func(t *testing.T) {
-		t.Parallel()
 		_, lm, _, _, rm := initRecoveryEnv(t, 1)
 		if rm == nil {
 			t.Fatal("recovery mgr is nil")
@@ -72,7 +69,6 @@ func TestRecoveryMgr(t *testing.T) {
 	})
 
 	t.Run("Commit writes COMMIT record", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		_, lm, _, _, rm := initRecoveryEnv(t, 2)
 		if err := rm.Commit(ctx); err != nil {
@@ -84,20 +80,53 @@ func TestRecoveryMgr(t *testing.T) {
 	})
 
 	t.Run("Rollback undoes all Set* and writes ROLLBACK", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, lm, bm, _, rm := initRecoveryEnv(t, 3)
 
-		blk, err := fm.Append(filename)
+		// Use separate blocks for each Set* to avoid XLock conflicts during undo
+		blk16, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		buff, err := bm.Pin(ctx, blk)
+		blk32, err := fm.Append(filename)
 		if err != nil {
-			t.Fatalf("pin failed: %v", err)
+			t.Fatalf("append block failed: %v", err)
+		}
+		blkStr, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		blkBool, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		blkDate, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
 		}
 
-		// Original values
+		buff16, err := bm.Pin(ctx, blk16)
+		if err != nil {
+			t.Fatalf("pin16 failed: %v", err)
+		}
+		buff32, err := bm.Pin(ctx, blk32)
+		if err != nil {
+			t.Fatalf("pin32 failed: %v", err)
+		}
+		buffStr, err := bm.Pin(ctx, blkStr)
+		if err != nil {
+			t.Fatalf("pinStr failed: %v", err)
+		}
+		buffBool, err := bm.Pin(ctx, blkBool)
+		if err != nil {
+			t.Fatalf("pinBool failed: %v", err)
+		}
+		buffDate, err := bm.Pin(ctx, blkDate)
+		if err != nil {
+			t.Fatalf("pinDate failed: %v", err)
+		}
+
+		// Original values and offsets
 		const off16 int32 = 0
 		const off32 int32 = 4
 		const offStr int32 = 32
@@ -108,65 +137,70 @@ func TestRecoveryMgr(t *testing.T) {
 		origStr := "orig"
 		origBool := true
 		origDate := time.Unix(1_690_000_000, 0).UTC()
-		p := buff.Contents()
-		if err := p.SetInt16(off16, orig16); err != nil {
+
+		p16 := buff16.Contents()
+		if err := p16.SetInt16(off16, orig16); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.SetInt32(off32, orig32); err != nil {
+		p32 := buff32.Contents()
+		if err := p32.SetInt32(off32, orig32); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.SetStr(offStr, origStr); err != nil {
+		pStr := buffStr.Contents()
+		if err := pStr.SetStr(offStr, origStr); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.SetBool(offBool, origBool); err != nil {
+		pBool := buffBool.Contents()
+		if err := pBool.SetBool(offBool, origBool); err != nil {
 			t.Fatal(err)
 		}
-		if err := p.SetDate(offDate, origDate); err != nil {
+		pDate := buffDate.Contents()
+		if err := pDate.SetDate(offDate, origDate); err != nil {
 			t.Fatal(err)
 		}
 
 		// Log with Set* (LSNs should be > 0)
-		if lsn, err := rm.SetInt16(buff, off16, 999); err != nil || lsn <= 0 {
+		if lsn, err := rm.SetInt16(buff16, off16, 999); err != nil || lsn <= 0 {
 			t.Fatalf("SetInt16 log failed: lsn=%d err=%v", lsn, err)
 		}
-		if lsn, err := rm.SetInt32(buff, off32, 888); err != nil || lsn <= 0 {
+		if lsn, err := rm.SetInt32(buff32, off32, 888); err != nil || lsn <= 0 {
 			t.Fatalf("SetInt32 log failed: lsn=%d err=%v", lsn, err)
 		}
-		if lsn, err := rm.SetStr(buff, offStr, "after"); err != nil || lsn <= 0 {
+		if lsn, err := rm.SetStr(buffStr, offStr, "after"); err != nil || lsn <= 0 {
 			t.Fatalf("SetStr log failed: lsn=%d err=%v", lsn, err)
 		}
-		if lsn, err := rm.SetBool(buff, offBool, !origBool); err != nil || lsn <= 0 {
+		if lsn, err := rm.SetBool(buffBool, offBool, !origBool); err != nil || lsn <= 0 {
 			t.Fatalf("SetBool log failed: lsn=%d err=%v", lsn, err)
 		}
-		if lsn, err := rm.SetDate(buff, offDate, time.Unix(0, 0).UTC()); err != nil || lsn <= 0 {
+		if lsn, err := rm.SetDate(buffDate, offDate, time.Unix(0, 0).UTC()); err != nil || lsn <= 0 {
 			t.Fatalf("SetDate log failed: lsn=%d err=%v", lsn, err)
 		}
 
 		// Overwrite values to verify Undo restores originals
-		p.SetInt16(off16, 999)
-		p.SetInt32(off32, 888)
-		p.SetStr(offStr, "after")
-		p.SetBool(offBool, !origBool)
-		p.SetDate(offDate, time.Unix(0, 0).UTC())
+		p16.SetInt16(off16, 999)
+		p32.SetInt32(off32, 888)
+		pStr.SetStr(offStr, "after")
+		pBool.SetBool(offBool, !origBool)
+		pDate.SetDate(offDate, time.Unix(0, 0).UTC())
 
 		if err := rm.Rollback(ctx); err != nil {
 			t.Fatalf("Rollback failed: %v", err)
 		}
 
 		// Expect originals restored
-		if got := p.GetInt16(off16); got != orig16 {
+		if got := p16.GetInt16(off16); got != orig16 {
 			t.Errorf("int16 expected %d got %d", orig16, got)
 		}
-		if got := p.GetInt32(off32); got != orig32 {
+		if got := p32.GetInt32(off32); got != orig32 {
 			t.Errorf("int32 expected %d got %d", orig32, got)
 		}
-		if got := p.GetStr(offStr); got != origStr {
+		if got := pStr.GetStr(offStr); got != origStr {
 			t.Errorf("str expected %q got %q", origStr, got)
 		}
-		if got := p.GetBool(offBool); got != origBool {
+		if got := pBool.GetBool(offBool); got != origBool {
 			t.Errorf("bool expected %v got %v", origBool, got)
 		}
-		if got := p.GetDate(offDate); !got.Equal(origDate) {
+		if got := pDate.GetDate(offDate); !got.Equal(origDate) {
 			t.Errorf("date expected %v got %v", origDate, got)
 		}
 
@@ -176,10 +210,10 @@ func TestRecoveryMgr(t *testing.T) {
 	})
 
 	t.Run("Recover undoes uncommitted and writes CHECKPOINT", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, lm, bm, _, rm := initRecoveryEnv(t, 4)
 
+		// Use separate block to avoid conflicts with other potential XLocks
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)

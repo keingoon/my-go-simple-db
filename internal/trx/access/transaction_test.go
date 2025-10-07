@@ -37,10 +37,7 @@ func initTx(t *testing.T, txnum int32) (*file.FileMgr, *log.LogMgr, *buffer.Buff
 }
 
 func TestTransaction(t *testing.T) {
-	t.Parallel()
-
 	t.Run("NewTransaction", func(t *testing.T) {
-		t.Parallel()
 		_, _, bm, tx := initTx(t, 1)
 
 		if tx == nil {
@@ -64,7 +61,6 @@ func TestTransaction(t *testing.T) {
 	})
 
 	t.Run("Pin and Unpin", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, bm, tx := initTx(t, 1)
 
@@ -93,7 +89,6 @@ func TestTransaction(t *testing.T) {
 	})
 
 	t.Run("SetInt16 and GetInt16", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 2)
 		blk, err := fm.Append(filename)
@@ -121,10 +116,12 @@ func TestTransaction(t *testing.T) {
 		if buff.ModifyingTx() != tx.txnum {
 			t.Errorf("expected modifying tx %d, got %d", tx.txnum, buff.ModifyingTx())
 		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
 	})
 
 	t.Run("SetInt32 and GetInt32", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 3)
 		blk, err := fm.Append(filename)
@@ -149,10 +146,12 @@ func TestTransaction(t *testing.T) {
 		if got := tx.GetInt32(ctx, blk, off); got != val {
 			t.Errorf("expected GetInt32 %d, got %d", val, got)
 		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
 	})
 
 	t.Run("SetStr and GetStr", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 4)
 		blk, err := fm.Append(filename)
@@ -177,10 +176,12 @@ func TestTransaction(t *testing.T) {
 		if got := tx.GetStr(ctx, blk, off); got != val {
 			t.Errorf("expected GetStr %q, got %q", val, got)
 		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
 	})
 
 	t.Run("SetBool and GetBool", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 5)
 		blk, err := fm.Append(filename)
@@ -205,10 +206,12 @@ func TestTransaction(t *testing.T) {
 		if got := tx.GetBool(ctx, blk, off); got != val {
 			t.Errorf("expected GetBool %v, got %v", val, got)
 		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
 	})
 
 	t.Run("SetDate and GetDate", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 6)
 		blk, err := fm.Append(filename)
@@ -233,10 +236,12 @@ func TestTransaction(t *testing.T) {
 		if got := tx.GetDate(ctx, blk, off); !got.Equal(val) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
 	})
 
 	t.Run("SLock and Unlock", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx1 := initTx(t, 7)
 		_, _, _, tx2 := initTx(t, 8)
@@ -273,7 +278,6 @@ func TestTransaction(t *testing.T) {
 	})
 
 	t.Run("XLock and Unlock", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx1 := initTx(t, 9)
 		_, _, _, tx2 := initTx(t, 10)
@@ -310,7 +314,6 @@ func TestTransaction(t *testing.T) {
 	})
 
 	t.Run("SLock and XLock", func(t *testing.T) {
-		t.Parallel()
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, 11)
 

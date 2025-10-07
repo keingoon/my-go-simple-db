@@ -51,9 +51,7 @@ func (r *SetInt32Record) String() string {
 
 func (r *SetInt32Record) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.XLock(ctx, r.blk)
 	txAccess.SetInt32(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
-	txAccess.Unlock(ctx, r.blk)
 	txAccess.Unpin(ctx, r.blk)
 }
 

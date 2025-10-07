@@ -48,9 +48,7 @@ func (r *SetBoolRecord) String() string {
 
 func (r *SetBoolRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.XLock(ctx, r.blk)
 	txAccess.SetBool(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
-	txAccess.Unlock(ctx, r.blk)
 	txAccess.Unpin(ctx, r.blk)
 }
 
