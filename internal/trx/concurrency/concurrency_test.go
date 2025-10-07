@@ -752,4 +752,75 @@ func TestConcurrencyMgr(t *testing.T) {
 			t.Error("Expected XLock to be released")
 		}
 	})
+
+	// Explicit Unlock tests
+	t.Run("Unlock releases SLock", func(t *testing.T) {
+		cm1 := NewConcurrencyMgr()
+		cm2 := NewConcurrencyMgr()
+		blk := file.NewBlockId("testfile_unlock_s", 0)
+
+		// cm1 acquires SLock
+		if err := cm1.SLock(context.Background(), blk); err != nil {
+			t.Fatalf("cm1 SLock failed: %v", err)
+		}
+		if !cm1.hasSLock(blk) {
+			t.Fatal("cm1 expected to hold SLock")
+		}
+
+		// cm2 XLock should timeout while SLock held
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		if err := cm2.XLock(ctx, blk); err == nil {
+			t.Fatal("expected cm2 XLock to timeout while SLock held")
+		}
+
+		// Unlock by cm1 should allow cm2 to acquire XLock
+		if err := cm1.Unlock(context.Background(), blk); err != nil {
+			t.Fatalf("cm1 Unlock failed: %v", err)
+		}
+		if cm1.hasSLock(blk) {
+			t.Error("expected cm1 SLock to be released after Unlock")
+		}
+		if err := cm2.XLock(context.Background(), blk); err != nil {
+			t.Fatalf("cm2 XLock after Unlock failed: %v", err)
+		}
+
+		// cleanup
+		_ = cm2.Unlock(context.Background(), blk)
+	})
+
+	t.Run("Unlock releases XLock", func(t *testing.T) {
+		cm1 := NewConcurrencyMgr()
+		cm2 := NewConcurrencyMgr()
+		blk := file.NewBlockId("testfile_unlock_x", 0)
+
+		// cm1 acquires XLock
+		if err := cm1.XLock(context.Background(), blk); err != nil {
+			t.Fatalf("cm1 XLock failed: %v", err)
+		}
+		if !cm1.hasXLock(blk) {
+			t.Fatal("cm1 expected to hold XLock")
+		}
+
+		// cm2 SLock should timeout while XLock held
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		if err := cm2.SLock(ctx, blk); err == nil {
+			t.Fatal("expected cm2 SLock to timeout while XLock held")
+		}
+
+		// Unlock by cm1 should allow cm2 to acquire SLock
+		if err := cm1.Unlock(context.Background(), blk); err != nil {
+			t.Fatalf("cm1 Unlock failed: %v", err)
+		}
+		if cm1.hasXLock(blk) {
+			t.Error("expected cm1 XLock to be released after Unlock")
+		}
+		if err := cm2.SLock(context.Background(), blk); err != nil {
+			t.Fatalf("cm2 SLock after Unlock failed: %v", err)
+		}
+
+		// cleanup
+		_ = cm2.Unlock(context.Background(), blk)
+	})
 }

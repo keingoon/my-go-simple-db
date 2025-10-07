@@ -50,7 +50,9 @@ func (r *SetDateRecord) String() string {
 
 func (r *SetDateRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
+	txAccess.XLock(ctx, r.blk)
 	txAccess.SetDate(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.Unlock(ctx, r.blk)
 	txAccess.Unpin(ctx, r.blk)
 }
 

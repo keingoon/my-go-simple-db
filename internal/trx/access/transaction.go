@@ -39,32 +39,35 @@ func (tx *Transaction) Unpin(ctx context.Context, blk *file.BlockId) {
 	tx.mybuffers.Unpin(ctx, blk)
 }
 
-func (tx *Transaction) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) int16 {
+func (tx *Transaction) SLock(ctx context.Context, blk *file.BlockId) {
 	tx.concurMgr.SLock(ctx, blk)
+}
+
+func (tx *Transaction) XLock(ctx context.Context, blk *file.BlockId) {
+	tx.concurMgr.XLock(ctx, blk)
+}
+
+func (tx *Transaction) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) int16 {
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetInt16(offset)
 }
 
 func (tx *Transaction) GetInt32(ctx context.Context, blk *file.BlockId, offset int32) int32 {
-	tx.concurMgr.SLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetInt32(offset)
 }
 
 func (tx *Transaction) GetStr(ctx context.Context, blk *file.BlockId, offset int32) string {
-	tx.concurMgr.SLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetStr(offset)
 }
 
 func (tx *Transaction) GetBool(ctx context.Context, blk *file.BlockId, offset int32) bool {
-	tx.concurMgr.SLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetBool(offset)
 }
 
 func (tx *Transaction) GetDate(ctx context.Context, blk *file.BlockId, offset int32) time.Time {
-	tx.concurMgr.SLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetDate(offset)
 }
@@ -77,7 +80,6 @@ func (tx *Transaction) SetInt16(
 	okToLog bool,
 	logFn func(buff *buffer.Buffer, offset int32, oldVal int16) (int32, error),
 ) error {
-	tx.concurMgr.XLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	var lsn = int32(-1)
 	if okToLog {
@@ -101,7 +103,6 @@ func (tx *Transaction) SetInt32(
 	okToLog bool,
 	logFn func(buff *buffer.Buffer, offset int32, oldVal int32) (int32, error),
 ) error {
-	tx.concurMgr.XLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	var lsn = int32(-1)
 	if okToLog {
@@ -125,7 +126,6 @@ func (tx *Transaction) SetStr(
 	okToLog bool,
 	logFn func(buff *buffer.Buffer, offset int32, oldVal string) (int32, error),
 ) error {
-	tx.concurMgr.XLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	var lsn = int32(-1)
 	if okToLog {
@@ -149,7 +149,6 @@ func (tx *Transaction) SetBool(
 	okToLog bool,
 	logFn func(buff *buffer.Buffer, offset int32, oldVal bool) (int32, error),
 ) error {
-	tx.concurMgr.XLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	var lsn = int32(-1)
 	if okToLog {
@@ -173,7 +172,6 @@ func (tx *Transaction) SetDate(
 	okToLog bool,
 	logFn func(buff *buffer.Buffer, offset int32, oldVal time.Time) (int32, error),
 ) error {
-	tx.concurMgr.XLock(ctx, blk)
 	buff := tx.mybuffers.GetBuffer(blk)
 	var lsn = int32(-1)
 	if okToLog {
@@ -187,4 +185,8 @@ func (tx *Transaction) SetDate(
 	p.SetDate(offset, val)
 	buff.SetModified(tx.txnum, int32(lsn))
 	return nil
+}
+
+func (tx *Transaction) Unlock(ctx context.Context, blk *file.BlockId) {
+	tx.concurMgr.Unlock(ctx, blk)
 }

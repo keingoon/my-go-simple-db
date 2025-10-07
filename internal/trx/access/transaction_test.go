@@ -234,4 +234,101 @@ func TestTransaction(t *testing.T) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
 	})
+
+	t.Run("SLock and Unlock", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		fm, _, _, tx1 := initTx(t, 7)
+		_, _, _, tx2 := initTx(t, 8)
+
+		blk, err := fm.Append("testfile_lock_slock")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		// Acquire SLock with tx1
+		tx1.SLock(ctx, blk)
+
+		// XLock on tx2 should block until timeout while SLock is held
+		tCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		tx2.XLock(tCtx, blk)
+		blocked := time.Since(start)
+		if blocked < 40*time.Millisecond {
+			t.Errorf("expected XLock to block ~50ms while SLock held, got %v", blocked)
+		}
+
+		// After Unlock by tx1, XLock on tx2 should succeed quickly
+		tx1.Unlock(ctx, blk)
+		start = time.Now()
+		tx2.XLock(context.Background(), blk)
+		elapsed := time.Since(start)
+		if elapsed > 200*time.Millisecond {
+			t.Errorf("expected XLock to succeed quickly after Unlock, took %v", elapsed)
+		}
+
+		// Cleanup
+		tx2.Unlock(ctx, blk)
+	})
+
+	t.Run("XLock and Unlock", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		fm, _, _, tx1 := initTx(t, 9)
+		_, _, _, tx2 := initTx(t, 10)
+
+		blk, err := fm.Append("testfile_lock_xlock")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		// Acquire XLock with tx1
+		tx1.XLock(ctx, blk)
+
+		// SLock on tx2 should block until timeout while XLock is held
+		tCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		tx2.SLock(tCtx, blk)
+		blocked := time.Since(start)
+		if blocked < 40*time.Millisecond {
+			t.Errorf("expected SLock to block ~50ms while XLock held, got %v", blocked)
+		}
+
+		// After Unlock by tx1, SLock on tx2 should succeed quickly
+		tx1.Unlock(ctx, blk)
+		start = time.Now()
+		tx2.SLock(context.Background(), blk)
+		elapsed := time.Since(start)
+		if elapsed > 200*time.Millisecond {
+			t.Errorf("expected SLock to succeed quickly after Unlock, took %v", elapsed)
+		}
+
+		// Cleanup
+		tx2.Unlock(ctx, blk)
+	})
+
+	t.Run("SLock and XLock", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		fm, _, _, tx := initTx(t, 11)
+
+		blk, err := fm.Append("testfile_lock_upgrade")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		// Acquire SLock then upgrade to XLock in the same transaction
+		tx.SLock(ctx, blk)
+		start := time.Now()
+		tx.XLock(ctx, blk)
+		elapsed := time.Since(start)
+		if elapsed > 200*time.Millisecond {
+			t.Errorf("expected XLock upgrade to be quick, took %v", elapsed)
+		}
+
+		// Cleanup
+		tx.Unlock(ctx, blk)
+	})
 }

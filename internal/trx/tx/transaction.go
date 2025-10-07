@@ -75,42 +75,52 @@ func (txmgr *TransactionMgr) Unpin(ctx context.Context, blk *file.BlockId) {
 }
 
 func (txmgr *TransactionMgr) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) int16 {
+	txmgr.txAccess.SLock(ctx, blk)
 	return txmgr.txAccess.GetInt16(ctx, blk, offset)
 }
 
 func (txmgr *TransactionMgr) GetInt32(ctx context.Context, blk *file.BlockId, offset int32) int32 {
+	txmgr.txAccess.SLock(ctx, blk)
 	return txmgr.txAccess.GetInt32(ctx, blk, offset)
 }
 
 func (txmgr *TransactionMgr) GetStr(ctx context.Context, blk *file.BlockId, offset int32) string {
+	txmgr.txAccess.SLock(ctx, blk)
 	return txmgr.txAccess.GetStr(ctx, blk, offset)
 }
 
 func (txmgr *TransactionMgr) GetBool(ctx context.Context, blk *file.BlockId, offset int32) bool {
+	txmgr.txAccess.SLock(ctx, blk)
 	return txmgr.txAccess.GetBool(ctx, blk, offset)
 }
 
 func (txmgr *TransactionMgr) GetDate(ctx context.Context, blk *file.BlockId, offset int32) time.Time {
+	txmgr.txAccess.SLock(ctx, blk)
 	return txmgr.txAccess.GetDate(ctx, blk, offset)
 }
 
 func (txmgr *TransactionMgr) SetInt16(ctx context.Context, blk *file.BlockId, offset int32, val int16, okToLog bool) error {
+	txmgr.txAccess.XLock(ctx, blk)
 	return txmgr.txAccess.SetInt16(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetInt16)
 }
 
 func (txmgr *TransactionMgr) SetInt32(ctx context.Context, blk *file.BlockId, offset int32, val int32, okToLog bool) error {
+	txmgr.txAccess.XLock(ctx, blk)
 	return txmgr.txAccess.SetInt32(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetInt32)
 }
 
 func (txmgr *TransactionMgr) SetStr(ctx context.Context, blk *file.BlockId, offset int32, val string, okToLog bool) error {
+	txmgr.txAccess.XLock(ctx, blk)
 	return txmgr.txAccess.SetStr(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetStr)
 }
 
 func (txmgr *TransactionMgr) SetBool(ctx context.Context, blk *file.BlockId, offset int32, val bool, okToLog bool) error {
+	txmgr.txAccess.XLock(ctx, blk)
 	return txmgr.txAccess.SetBool(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetBool)
 }
 
 func (txmgr *TransactionMgr) SetDate(ctx context.Context, blk *file.BlockId, offset int32, val time.Time, okToLog bool) error {
+	txmgr.txAccess.XLock(ctx, blk)
 	return txmgr.txAccess.SetDate(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetDate)
 }
 

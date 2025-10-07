@@ -424,6 +424,14 @@ func (conMgr *ConcurrencyMgr) XLock(ctx context.Context, blk *file.BlockId) erro
 	return nil
 }
 
+func (conMgr *ConcurrencyMgr) Unlock(ctx context.Context, blk *file.BlockId) error {
+	shard := conMgr.getShard(blk)
+	shard.mu.Lock()
+	delete(shard.locks, *blk)
+	shard.mu.Unlock()
+	return LockTbl.Unlock(ctx, blk)
+}
+
 func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
 	// 全shardを順次処理
 	for _, shard := range conMgr.shards {
