@@ -38,35 +38,35 @@ func initMgr(t *testing.T, dir string) (*file.FileMgr, *log.LogMgr, *buffer.Buff
 func TestTransaction(t *testing.T) {
 	t.Run("NewTransactionMgr", func(t *testing.T) {
 		fm, lm, bm := initMgr(t, "")
-		txmgr := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 
-		if txmgr == nil {
+		if wTx == nil {
 			t.Fatal("NewTransactionMgr returned nil")
 		}
-		if txmgr.bm != bm {
+		if wTx.bm != bm {
 			t.Errorf("expected bm to be set")
 		}
-		if txmgr.fm == nil {
+		if wTx.fm == nil {
 			t.Errorf("expected fm to be set")
 		}
-		if txmgr.recoveryMgr == nil {
+		if wTx.recoveryMgr == nil {
 			t.Errorf("expected recoveryMgr to be set")
 		}
-		if txmgr.mybuffers == nil {
+		if wTx.mybuffers == nil {
 			t.Errorf("expected mybuffers to be initialized")
 		}
-		if txmgr.txAccess == nil {
+		if wTx.txAccess == nil {
 			t.Errorf("expected txAccess to be initialized")
 		}
-		if txmgr.txnum != 1 {
-			t.Errorf("expected txnum 1, got %d", txmgr.txnum)
+		if wTx.txnum != 1 {
+			t.Errorf("expected txnum 1, got %d", wTx.txnum)
 		}
 	})
 
 	t.Run("Pin and Unpin", func(t *testing.T) {
 		ctx := context.Background()
 		fm, lm, bm := initMgr(t, "")
-		txmgr := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -74,20 +74,20 @@ func TestTransaction(t *testing.T) {
 		}
 
 		before := bm.Available()
-		txmgr.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 		if bm.Available() != before-1 {
 			t.Errorf("expected available %d, got %d", before-1, bm.Available())
 		}
-		buff := txmgr.mybuffers.GetBuffer(blk)
+		buff := wTx.mybuffers.GetBuffer(blk)
 		if buff == nil || !buff.IsPinned() {
 			t.Errorf("expected buffer pinned for blk")
 		}
 
-		txmgr.Unpin(ctx, blk)
+		wTx.Unpin(ctx, blk)
 		if bm.Available() != before {
 			t.Errorf("expected available %d, got %d", before, bm.Available())
 		}
-		if txmgr.mybuffers.GetBuffer(blk) != nil {
+		if wTx.mybuffers.GetBuffer(blk) != nil {
 			t.Errorf("expected buffer to be removed from mybuffers after unpin")
 		}
 	})
@@ -95,156 +95,156 @@ func TestTransaction(t *testing.T) {
 	t.Run("SetInt16 and GetInt16", func(t *testing.T) {
 		ctx := context.Background()
 		fm, lm, bm := initMgr(t, "")
-		txmgr1 := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		txmgr1.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 
 		const off int32 = 0
 		val := int16(1234)
-		if err := txmgr1.SetInt16(ctx, blk, off, val, true); err != nil {
+		if err := wTx.SetInt16(ctx, blk, off, val, true); err != nil {
 			t.Fatalf("SetInt16 failed: %v", err)
 		}
-		txmgr1.Commit(ctx)
-		txmgr1.Unpin(ctx, blk)
+		wTx.Commit(ctx)
+		wTx.Unpin(ctx, blk)
 
-		txmgr2 := NewTransactionMgr(fm, lm, bm)
-		txmgr2.Pin(ctx, blk)
-		buff := txmgr2.mybuffers.GetBuffer(blk)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		buff := rTx.mybuffers.GetBuffer(blk)
 		if got := buff.Contents().GetInt16(off); got != val {
 			t.Errorf("expected page int16 %d, got %d", val, got)
 		}
-		if got := txmgr2.GetInt16(ctx, blk, off); got != val {
+		if got := rTx.GetInt16(ctx, blk, off); got != val {
 			t.Errorf("expected GetInt16 %d, got %d", val, got)
 		}
-		txmgr2.Commit(ctx)
-		txmgr2.Unpin(ctx, blk)
+		rTx.Commit(ctx)
+		rTx.Unpin(ctx, blk)
 	})
 
 	t.Run("SetInt32 and GetInt32", func(t *testing.T) {
 		ctx := context.Background()
 
 		fm, lm, bm := initMgr(t, "")
-		txmgr1 := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		txmgr1.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 		const off int32 = 4
 		val := int32(987654321)
-		if err := txmgr1.SetInt32(ctx, blk, off, val, true); err != nil {
+		if err := wTx.SetInt32(ctx, blk, off, val, true); err != nil {
 			t.Fatalf("SetInt32 failed: %v", err)
 		}
-		txmgr1.Commit(ctx)
-		txmgr1.Unpin(ctx, blk)
+		wTx.Commit(ctx)
+		wTx.Unpin(ctx, blk)
 
-		txmgr2 := NewTransactionMgr(fm, lm, bm)
-		txmgr2.Pin(ctx, blk)
-		buff := txmgr2.mybuffers.GetBuffer(blk)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		buff := rTx.mybuffers.GetBuffer(blk)
 		if got := buff.Contents().GetInt32(off); got != val {
 			t.Errorf("expected page int32 %d, got %d", val, got)
 		}
-		if got := txmgr2.GetInt32(ctx, blk, off); got != val {
+		if got := rTx.GetInt32(ctx, blk, off); got != val {
 			t.Errorf("expected GetInt32 %d, got %d", val, got)
 		}
-		txmgr2.Commit(ctx)
-		txmgr2.Unpin(ctx, blk)
+		rTx.Commit(ctx)
+		rTx.Unpin(ctx, blk)
 	})
 
 	t.Run("SetStr and GetStr", func(t *testing.T) {
 		ctx := context.Background()
 
 		fm, lm, bm := initMgr(t, "")
-		txmgr1 := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		txmgr1.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 		const off int32 = 32
 		val := "hello"
-		if err := txmgr1.SetStr(ctx, blk, off, val, true); err != nil {
+		if err := wTx.SetStr(ctx, blk, off, val, true); err != nil {
 			t.Fatalf("SetStr failed: %v", err)
 		}
-		txmgr1.Commit(ctx)
-		txmgr1.Unpin(ctx, blk)
+		wTx.Commit(ctx)
+		wTx.Unpin(ctx, blk)
 
-		txmgr2 := NewTransactionMgr(fm, lm, bm)
-		txmgr2.Pin(ctx, blk)
-		buff := txmgr2.mybuffers.GetBuffer(blk)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		buff := rTx.mybuffers.GetBuffer(blk)
 		if got := buff.Contents().GetStr(off); got != val {
 			t.Errorf("expected page str %q, got %q", val, got)
 		}
-		if got := txmgr2.GetStr(ctx, blk, off); got != val {
+		if got := rTx.GetStr(ctx, blk, off); got != val {
 			t.Errorf("expected GetStr %q, got %q", val, got)
 		}
-		txmgr2.Commit(ctx)
-		txmgr2.Unpin(ctx, blk)
+		rTx.Commit(ctx)
+		rTx.Unpin(ctx, blk)
 	})
 
 	t.Run("SetBool and GetBool", func(t *testing.T) {
 		ctx := context.Background()
 		fm, lm, bm := initMgr(t, "")
-		txmgr1 := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		txmgr1.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 
 		const off int32 = 64
 		val := true
-		if err := txmgr1.SetBool(ctx, blk, off, val, true); err != nil {
+		if err := wTx.SetBool(ctx, blk, off, val, true); err != nil {
 			t.Fatalf("SetBool failed: %v", err)
 		}
-		txmgr1.Commit(ctx)
-		txmgr1.Unpin(ctx, blk)
+		wTx.Commit(ctx)
+		wTx.Unpin(ctx, blk)
 
-		txmgr2 := NewTransactionMgr(fm, lm, bm)
-		txmgr2.Pin(ctx, blk)
-		buff := txmgr2.mybuffers.GetBuffer(blk)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		buff := rTx.mybuffers.GetBuffer(blk)
 		if got := buff.Contents().GetBool(off); got != val {
 			t.Errorf("expected page bool %v, got %v", val, got)
 		}
-		if got := txmgr2.GetBool(ctx, blk, off); got != val {
+		if got := rTx.GetBool(ctx, blk, off); got != val {
 			t.Errorf("expected GetBool %v, got %v", val, got)
 		}
-		txmgr2.Commit(ctx)
-		txmgr2.Unpin(ctx, blk)
+		rTx.Commit(ctx)
+		rTx.Unpin(ctx, blk)
 	})
 
 	t.Run("SetDate and GetDate", func(t *testing.T) {
 		ctx := context.Background()
 		fm, lm, bm := initMgr(t, "")
-		txmgr1 := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		txmgr1.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 
 		const off int32 = 96
 		val := time.Unix(1_690_000_000, 0).UTC()
-		if err := txmgr1.SetDate(ctx, blk, off, val, true); err != nil {
+		if err := wTx.SetDate(ctx, blk, off, val, true); err != nil {
 			t.Fatalf("SetDate failed: %v", err)
 		}
-		txmgr1.Commit(ctx)
-		txmgr1.Unpin(ctx, blk)
+		wTx.Commit(ctx)
+		wTx.Unpin(ctx, blk)
 
-		txmgr2 := NewTransactionMgr(fm, lm, bm)
-		txmgr2.Pin(ctx, blk)
-		buff := txmgr2.mybuffers.GetBuffer(blk)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		buff := rTx.mybuffers.GetBuffer(blk)
 		if got := buff.Contents().GetDate(off); !got.Equal(val) {
 			t.Errorf("expected page date %v, got %v", val, got)
 		}
-		if got := txmgr2.GetDate(ctx, blk, off); !got.Equal(val) {
+		if got := rTx.GetDate(ctx, blk, off); !got.Equal(val) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
-		txmgr2.Commit(ctx)
-		txmgr2.Unpin(ctx, blk)
+		rTx.Commit(ctx)
+		rTx.Unpin(ctx, blk)
 	})
 	t.Run("SetInt16 and GetInt16 in same transaction", func(t *testing.T) {
 		ctx := context.Background()
@@ -275,29 +275,29 @@ func TestTransaction(t *testing.T) {
 	t.Run("Rollback undoes uncommitted writes", func(t *testing.T) {
 		ctx := context.Background()
 		fm, lm, bm := initMgr(t, "")
-		tx := NewTransactionMgr(fm, lm, bm)
+		wTx := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		tx.Pin(ctx, blk)
+		wTx.Pin(ctx, blk)
 
 		const off int32 = 4
 		before := int32(0)
 		// write and then rollback
-		if err := tx.SetInt32(ctx, blk, off, 111, true); err != nil {
+		if err := wTx.SetInt32(ctx, blk, off, 111, true); err != nil {
 			t.Fatalf("SetInt32 failed: %v", err)
 		}
-		tx.Rollback(ctx)
+		wTx.Rollback(ctx)
 
 		// start a new transaction to read the page
-		reader := NewTransactionMgr(fm, lm, bm)
-		reader.Pin(ctx, blk)
-		got := reader.GetInt32(ctx, blk, off)
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		got := rTx.GetInt32(ctx, blk, off)
 		if got != before {
 			t.Errorf("expected value after rollback %d, got %d", before, got)
 		}
-		reader.Commit(ctx)
+		rTx.Commit(ctx)
 	})
 
 	// Recover should undo losers and keep winners
@@ -309,29 +309,29 @@ func TestTransaction(t *testing.T) {
 		fm, lm, bm := initMgr(t, dir)
 
 		// tx1 writes and commits
-		tx1 := NewTransactionMgr(fm, lm, bm)
+		wTx1 := NewTransactionMgr(fm, lm, bm)
 		blk1, err := fm.Append("recover_keep")
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		tx1.Pin(ctx, blk1)
+		wTx1.Pin(ctx, blk1)
 		const off1 int32 = 0
 		val1 := int32(777)
-		if err := tx1.SetInt32(ctx, blk1, off1, val1, true); err != nil {
+		if err := wTx1.SetInt32(ctx, blk1, off1, val1, true); err != nil {
 			t.Fatalf("tx1 SetInt32 failed: %v", err)
 		}
-		tx1.Commit(ctx)
+		wTx1.Commit(ctx)
 
 		// tx2 writes but does NOT commit (loser)
-		tx2 := NewTransactionMgr(fm, lm, bm)
+		wTx2 := NewTransactionMgr(fm, lm, bm)
 		blk2, err := fm.Append("recover_undo")
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
-		tx2.Pin(ctx, blk2)
+		wTx2.Pin(ctx, blk2)
 		const off2 int32 = 4
 		val2 := int32(999)
-		if err := tx2.SetInt32(ctx, blk2, off2, val2, true); err != nil {
+		if err := wTx2.SetInt32(ctx, blk2, off2, val2, true); err != nil {
 			t.Fatalf("tx2 SetInt32 failed: %v", err)
 		}
 		// no commit for tx2; simulate crash
@@ -345,20 +345,20 @@ func TestTransaction(t *testing.T) {
 		recoverTxMgr.Recover(ctx)
 
 		// verify committed value remains
-		reader1 := NewTransactionMgr(fm, lm, bm)
-		reader1.Pin(ctx, blk1)
-		if got := reader1.GetInt32(ctx, blk1, off1); got != val1 {
+		rTx1 := NewTransactionMgr(fm, lm, bm)
+		rTx1.Pin(ctx, blk1)
+		if got := rTx1.GetInt32(ctx, blk1, off1); got != val1 {
 			t.Errorf("expected committed value %d, got %d", val1, got)
 		}
-		reader1.Commit(ctx)
+		rTx1.Commit(ctx)
 
 		// verify loser write undone (expect 0)
-		reader2 := NewTransactionMgr(fm, lm, bm)
-		reader2.Pin(ctx, blk2)
-		if got := reader2.GetInt32(ctx, blk2, off2); got != 0 {
+		rTx2 := NewTransactionMgr(fm, lm, bm)
+		rTx2.Pin(ctx, blk2)
+		if got := rTx2.GetInt32(ctx, blk2, off2); got != 0 {
 			t.Errorf("expected undone value %d, got %d", 0, got)
 		}
-		reader2.Commit(ctx)
+		rTx2.Commit(ctx)
 	})
 
 	t.Run("SetInt32 and GetInt32 in same transaction", func(t *testing.T) {
