@@ -8,6 +8,7 @@ import (
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/bufferlist"
 )
 
 const (
@@ -30,9 +31,9 @@ func initTx(t *testing.T, txnum int32) (*file.FileMgr, *log.LogMgr, *buffer.Buff
 		t.Fatalf("failed to create LogMgr: %v", err)
 	}
 	bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+	mybuffers := bufferlist.NewBufferList(bm)
 
-	// mybuffers arg is ignored by NewTransaction; it creates its own BufferList
-	tx := NewTransaction(fm, lm, bm, txnum, nil)
+	tx := NewTransaction(fm, lm, bm, txnum, mybuffers)
 	return fm, lm, bm, tx
 }
 

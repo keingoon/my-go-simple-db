@@ -11,7 +11,6 @@ import (
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/access"
 	"github.com/keingoon/simpledb/internal/trx/bufferlist"
-	"github.com/keingoon/simpledb/internal/trx/concurrency"
 	"github.com/keingoon/simpledb/internal/trx/recovery"
 )
 
@@ -19,11 +18,10 @@ const (
 	EndOfFile = -1
 )
 
-var atomicNextTxNum atomic.Int32
+var atomicNextTxNum int32 = 0
 
 type TransactionMgr struct {
 	recoveryMgr *recovery.RecoveryMgr
-	concurMgr   *concurrency.ConcurrencyMgr
 	bm          *buffer.BufferMgr
 	fm          *file.FileMgr
 	txnum       int32
@@ -31,13 +29,13 @@ type TransactionMgr struct {
 	txAccess    *access.Transaction
 }
 
-func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32) *TransactionMgr {
+func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) *TransactionMgr {
 	mybuffers := bufferlist.NewBufferList(bm)
+	txnum := nextTxNumber()
 	txAccess := access.NewTransaction(fm, lm, bm, txnum, mybuffers)
 
 	txmgr := &TransactionMgr{
 		recoveryMgr: recovery.NewRecoveryMgr(lm, bm, txAccess, txnum),
-		concurMgr:   concurrency.NewConcurrencyMgr(),
 		bm:          bm,
 		fm:          fm,
 		txnum:       txnum,
@@ -50,14 +48,14 @@ func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, t
 func (txmgr *TransactionMgr) Commit(ctx context.Context) {
 	txmgr.recoveryMgr.Commit(ctx)
 	fmt.Println("transaction ", txmgr.txnum, " commited")
-	txmgr.concurMgr.Release(ctx)
+	txmgr.txAccess.Release(ctx)
 	txmgr.mybuffers.UnpinAll(ctx)
 }
 
 func (txmgr *TransactionMgr) Rollback(ctx context.Context) {
 	txmgr.recoveryMgr.Rollback(ctx)
 	fmt.Println("transaction ", txmgr.txnum, " rolled back")
-	txmgr.concurMgr.Release(ctx)
+	txmgr.txAccess.Release(ctx)
 	txmgr.mybuffers.UnpinAll(ctx)
 }
 
@@ -124,7 +122,7 @@ func (txmgr *TransactionMgr) SetDate(ctx context.Context, blk *file.BlockId, off
 	return txmgr.txAccess.SetDate(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetDate)
 }
 
-func NextTxNumber() int32 {
-	atomicNextTxNum.Add(1)
-	return atomicNextTxNum.Load()
+func nextTxNumber() int32 {
+	atomic.AddInt32(&atomicNextTxNum, 1)
+	return atomicNextTxNum
 }

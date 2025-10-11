@@ -26,7 +26,7 @@ func NewTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnu
 		bm:        bm,
 		fm:        fm,
 		txnum:     txnum,
-		mybuffers: bufferlist.NewBufferList(bm),
+		mybuffers: mybuffers,
 	}
 	return tx
 }
@@ -199,4 +199,8 @@ func (tx *Transaction) SetDate(
 
 func (tx *Transaction) Unlock(ctx context.Context, blk *file.BlockId) {
 	tx.concurMgr.Unlock(ctx, blk)
+}
+
+func (tx *Transaction) Release(ctx context.Context) error {
+	return tx.concurMgr.Release(ctx)
 }
