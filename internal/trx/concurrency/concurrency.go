@@ -384,12 +384,9 @@ func (conMgr *ConcurrencyMgr) SLock(ctx context.Context, blk *file.BlockId) erro
 	shard := conMgr.getShard(blk)
 
 	// すでに保持している場合は何もしない
-	shard.mu.Lock()
-	if waiter, ok := shard.locks[*blk]; ok && waiter != nil {
-		shard.mu.Unlock()
+	if conMgr.hasLock(blk) {
 		return nil
 	}
-	shard.mu.Unlock()
 
 	rWaiter := newWaiter(readMode, false)
 	if err := LockTbl.SLock(ctx, blk, rWaiter); err != nil {
@@ -447,6 +444,14 @@ func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
 		shard.mu.Unlock()
 	}
 	return nil
+}
+
+func (conMgr *ConcurrencyMgr) hasLock(blk *file.BlockId) bool {
+	shard := conMgr.getShard(blk)
+	shard.mu.RLock()
+	waiter := shard.locks[*blk]
+	shard.mu.RUnlock()
+	return waiter != nil
 }
 
 func (conMgr *ConcurrencyMgr) hasSLock(blk *file.BlockId) bool {

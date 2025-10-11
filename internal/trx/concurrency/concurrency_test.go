@@ -512,6 +512,58 @@ func TestConcurrencyMgr(t *testing.T) {
 		}
 	})
 
+	// Same-block sequences
+	t.Run("SLock same block twice", func(t *testing.T) {
+		cm := NewConcurrencyMgr()
+		ctx := context.Background()
+		blk := file.NewBlockId("testfile_s_to_s", 0)
+
+		if err := cm.SLock(ctx, blk); err != nil {
+			t.Fatalf("first SLock failed: %v", err)
+		}
+		if !cm.hasSLock(blk) {
+			t.Fatal("expected SLock to be held after first SLock")
+		}
+
+		// Second SLock on same block should be a no-op and succeed
+		if err := cm.SLock(ctx, blk); err != nil {
+			t.Fatalf("second SLock failed: %v", err)
+		}
+		if !cm.hasSLock(blk) {
+			t.Error("expected SLock to still be held after second SLock")
+		}
+
+		if err := cm.Release(ctx); err != nil {
+			t.Fatalf("Release failed: %v", err)
+		}
+	})
+
+	t.Run("XLock then SLock same block", func(t *testing.T) {
+		cm := NewConcurrencyMgr()
+		ctx := context.Background()
+		blk := file.NewBlockId("testfile_x_to_s", 0)
+
+		if err := cm.XLock(ctx, blk); err != nil {
+			t.Fatalf("XLock failed: %v", err)
+		}
+		if !cm.hasXLock(blk) {
+			t.Fatal("expected XLock to be held before SLock")
+		}
+
+		// SLock after XLock in same txn should be a no-op and succeed
+		if err := cm.SLock(ctx, blk); err != nil {
+			t.Fatalf("SLock after XLock failed: %v", err)
+		}
+		// Still XLock (hasSLock may be false because waiter mode is write)
+		if !cm.hasXLock(blk) {
+			t.Error("expected XLock to still be held after SLock")
+		}
+
+		if err := cm.Release(ctx); err != nil {
+			t.Fatalf("Release failed: %v", err)
+		}
+	})
+
 	t.Run("XLock single block", func(t *testing.T) {
 		cm := NewConcurrencyMgr()
 		ctx := context.Background()
