@@ -242,6 +242,130 @@ func TestTransaction(t *testing.T) {
 		txmgr2.Commit(ctx)
 		txmgr2.Unpin(ctx, blk)
 	})
+	t.Run("SetInt16 and GetInt16 in same transaction", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t)
+		txmgr := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		txmgr.Pin(ctx, blk)
+
+		const off int32 = 0
+		val := int16(1234)
+		if err := txmgr.SetInt16(ctx, blk, off, val, true); err != nil {
+			t.Fatalf("SetInt16 failed: %v", err)
+		}
+		buff := txmgr.mybuffers.GetBuffer(blk)
+		if got := buff.Contents().GetInt16(off); got != val {
+			t.Errorf("expected page int16 %d, got %d", val, got)
+		}
+		if got := txmgr.GetInt16(ctx, blk, off); got != val {
+			t.Errorf("expected GetInt16 %d, got %d", val, got)
+		}
+		txmgr.Commit(ctx)
+	})
+
+	t.Run("SetInt32 and GetInt32 in same transaction", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t)
+		txmgr := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		txmgr.Pin(ctx, blk)
+
+		const off int32 = 4
+		val := int32(987654321)
+		if err := txmgr.SetInt32(ctx, blk, off, val, true); err != nil {
+			t.Fatalf("SetInt32 failed: %v", err)
+		}
+		buff := txmgr.mybuffers.GetBuffer(blk)
+		if got := buff.Contents().GetInt32(off); got != val {
+			t.Errorf("expected page int32 %d, got %d", val, got)
+		}
+		if got := txmgr.GetInt32(ctx, blk, off); got != val {
+			t.Errorf("expected GetInt32 %d, got %d", val, got)
+		}
+		txmgr.Commit(ctx)
+	})
+
+	t.Run("SetStr and GetStr in same transaction", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t)
+		txmgr := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		txmgr.Pin(ctx, blk)
+
+		const off int32 = 32
+		val := "hello"
+		if err := txmgr.SetStr(ctx, blk, off, val, true); err != nil {
+			t.Fatalf("SetStr failed: %v", err)
+		}
+		buff := txmgr.mybuffers.GetBuffer(blk)
+		if got := buff.Contents().GetStr(off); got != val {
+			t.Errorf("expected page str %q, got %q", val, got)
+		}
+		if got := txmgr.GetStr(ctx, blk, off); got != val {
+			t.Errorf("expected GetStr %q, got %q", val, got)
+		}
+		txmgr.Commit(ctx)
+	})
+
+	t.Run("SetBool and GetBool in same transaction", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t)
+		txmgr := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		txmgr.Pin(ctx, blk)
+
+		const off int32 = 64
+		val := true
+		if err := txmgr.SetBool(ctx, blk, off, val, true); err != nil {
+			t.Fatalf("SetBool failed: %v", err)
+		}
+		buff := txmgr.mybuffers.GetBuffer(blk)
+		if got := buff.Contents().GetBool(off); got != val {
+			t.Errorf("expected page bool %v, got %v", val, got)
+		}
+		if got := txmgr.GetBool(ctx, blk, off); got != val {
+			t.Errorf("expected GetBool %v, got %v", val, got)
+		}
+		txmgr.Commit(ctx)
+	})
+
+	t.Run("SetDate and GetDate in same transaction", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t)
+		txmgr := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		txmgr.Pin(ctx, blk)
+
+		const off int32 = 96
+		val := time.Unix(1_690_000_000, 0).UTC()
+		if err := txmgr.SetDate(ctx, blk, off, val, true); err != nil {
+			t.Fatalf("SetDate failed: %v", err)
+		}
+		buff := txmgr.mybuffers.GetBuffer(blk)
+		if got := buff.Contents().GetDate(off); !got.Equal(val) {
+			t.Errorf("expected page date %v, got %v", val, got)
+		}
+		if got := txmgr.GetDate(ctx, blk, off); !got.Equal(val) {
+			t.Errorf("expected GetDate %v, got %v", val, got)
+		}
+		txmgr.Commit(ctx)
+	})
 
 	t.Run("Commit releases resources", func(t *testing.T) {
 		ctx := context.Background()
