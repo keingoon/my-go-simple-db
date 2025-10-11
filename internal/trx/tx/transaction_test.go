@@ -8,6 +8,7 @@ import (
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/concurrency"
 )
 
 const (
@@ -17,9 +18,12 @@ const (
 	numbuffs  = 10
 )
 
-func initMgr(t *testing.T) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr) {
+func initMgr(t *testing.T, dir string) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr) {
 	t.Helper()
-	fm, err := file.NewFileMgr(t.TempDir(), blocksize)
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	fm, err := file.NewFileMgr(dir, blocksize)
 	if err != nil {
 		t.Fatalf("failed to create FileMgr: %v", err)
 	}
@@ -33,7 +37,7 @@ func initMgr(t *testing.T) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr) {
 
 func TestTransaction(t *testing.T) {
 	t.Run("NewTransactionMgr", func(t *testing.T) {
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 
 		if txmgr == nil {
@@ -61,7 +65,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("Pin and Unpin", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 
 		blk, err := fm.Append(filename)
@@ -90,7 +94,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetInt16 and GetInt16", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr1 := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -122,7 +126,7 @@ func TestTransaction(t *testing.T) {
 	t.Run("SetInt32 and GetInt32", func(t *testing.T) {
 		ctx := context.Background()
 
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr1 := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -153,7 +157,7 @@ func TestTransaction(t *testing.T) {
 	t.Run("SetStr and GetStr", func(t *testing.T) {
 		ctx := context.Background()
 
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr1 := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -183,7 +187,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetBool and GetBool", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr1 := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -214,7 +218,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetDate and GetDate", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr1 := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -244,7 +248,7 @@ func TestTransaction(t *testing.T) {
 	})
 	t.Run("SetInt16 and GetInt16 in same transaction", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -267,9 +271,99 @@ func TestTransaction(t *testing.T) {
 		txmgr.Commit(ctx)
 	})
 
+	// Rollback should undo uncommitted changes
+	t.Run("Rollback undoes uncommitted writes", func(t *testing.T) {
+		ctx := context.Background()
+		fm, lm, bm := initMgr(t, "")
+		tx := NewTransactionMgr(fm, lm, bm)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		tx.Pin(ctx, blk)
+
+		const off int32 = 4
+		before := int32(0)
+		// write and then rollback
+		if err := tx.SetInt32(ctx, blk, off, 111, true); err != nil {
+			t.Fatalf("SetInt32 failed: %v", err)
+		}
+		tx.Rollback(ctx)
+
+		// start a new transaction to read the page
+		reader := NewTransactionMgr(fm, lm, bm)
+		reader.Pin(ctx, blk)
+		got := reader.GetInt32(ctx, blk, off)
+		if got != before {
+			t.Errorf("expected value after rollback %d, got %d", before, got)
+		}
+		reader.Commit(ctx)
+	})
+
+	// Recover should undo losers and keep winners
+	t.Run("Recover undoes losers and keeps committed", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Use a fixed directory to simulate crash/restart using same disk
+		dir := t.TempDir()
+		fm, lm, bm := initMgr(t, dir)
+
+		// tx1 writes and commits
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		blk1, err := fm.Append("recover_keep")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		tx1.Pin(ctx, blk1)
+		const off1 int32 = 0
+		val1 := int32(777)
+		if err := tx1.SetInt32(ctx, blk1, off1, val1, true); err != nil {
+			t.Fatalf("tx1 SetInt32 failed: %v", err)
+		}
+		tx1.Commit(ctx)
+
+		// tx2 writes but does NOT commit (loser)
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		blk2, err := fm.Append("recover_undo")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		tx2.Pin(ctx, blk2)
+		const off2 int32 = 4
+		val2 := int32(999)
+		if err := tx2.SetInt32(ctx, blk2, off2, val2, true); err != nil {
+			t.Fatalf("tx2 SetInt32 failed: %v", err)
+		}
+		// no commit for tx2; simulate crash
+		// Reset in-memory global lock table as a reboot would
+		concurrency.LockTbl = concurrency.NewLockTable()
+		// Recreate managers pointing to same directory (fresh process state)
+		fm, lm, bm = initMgr(t, dir)
+
+		// system recovery
+		recoverTxMgr := NewTransactionMgr(fm, lm, bm)
+		recoverTxMgr.Recover(ctx)
+
+		// verify committed value remains
+		reader1 := NewTransactionMgr(fm, lm, bm)
+		reader1.Pin(ctx, blk1)
+		if got := reader1.GetInt32(ctx, blk1, off1); got != val1 {
+			t.Errorf("expected committed value %d, got %d", val1, got)
+		}
+		reader1.Commit(ctx)
+
+		// verify loser write undone (expect 0)
+		reader2 := NewTransactionMgr(fm, lm, bm)
+		reader2.Pin(ctx, blk2)
+		if got := reader2.GetInt32(ctx, blk2, off2); got != 0 {
+			t.Errorf("expected undone value %d, got %d", 0, got)
+		}
+		reader2.Commit(ctx)
+	})
+
 	t.Run("SetInt32 and GetInt32 in same transaction", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -294,7 +388,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetStr and GetStr in same transaction", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -319,7 +413,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetBool and GetBool in same transaction", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -344,7 +438,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetDate and GetDate in same transaction", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -369,7 +463,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("Commit releases resources", func(t *testing.T) {
 		ctx := context.Background()
-		fm, lm, bm := initMgr(t)
+		fm, lm, bm := initMgr(t, "")
 		txmgr := NewTransactionMgr(fm, lm, bm)
 
 		blk, err := fm.Append("testfile_tx_commit")
