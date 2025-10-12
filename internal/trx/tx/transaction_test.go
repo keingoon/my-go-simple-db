@@ -116,7 +116,11 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt16(off); got != val {
 			t.Errorf("expected page int16 %d, got %d", val, got)
 		}
-		if got := rTx.GetInt16(ctx, blk, off); got != val {
+		got, err := rTx.GetInt16(ctx, blk, off)
+		if err != nil {
+			t.Fatalf("GetInt16 failed: %v", err)
+		}
+		if got != val {
 			t.Errorf("expected GetInt16 %d, got %d", val, got)
 		}
 		rTx.Commit(ctx)
@@ -147,7 +151,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt32(off); got != val {
 			t.Errorf("expected page int32 %d, got %d", val, got)
 		}
-		if got := rTx.GetInt32(ctx, blk, off); got != val {
+		if got, err := rTx.GetInt32(ctx, blk, off); err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetInt32 %d, got %d", val, got)
 		}
 		rTx.Commit(ctx)
@@ -178,7 +184,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetStr(off); got != val {
 			t.Errorf("expected page str %q, got %q", val, got)
 		}
-		if got := rTx.GetStr(ctx, blk, off); got != val {
+		if got, err := rTx.GetStr(ctx, blk, off); err != nil {
+			t.Fatalf("GetStr failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetStr %q, got %q", val, got)
 		}
 		rTx.Commit(ctx)
@@ -209,7 +217,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetBool(off); got != val {
 			t.Errorf("expected page bool %v, got %v", val, got)
 		}
-		if got := rTx.GetBool(ctx, blk, off); got != val {
+		if got, err := rTx.GetBool(ctx, blk, off); err != nil {
+			t.Fatalf("GetBool failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetBool %v, got %v", val, got)
 		}
 		rTx.Commit(ctx)
@@ -240,7 +250,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetDate(off); !got.Equal(val) {
 			t.Errorf("expected page date %v, got %v", val, got)
 		}
-		if got := rTx.GetDate(ctx, blk, off); !got.Equal(val) {
+		if got, err := rTx.GetDate(ctx, blk, off); err != nil {
+			t.Fatalf("GetDate failed: %v", err)
+		} else if !got.Equal(val) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
 		rTx.Commit(ctx)
@@ -265,7 +277,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt16(off); got != val {
 			t.Errorf("expected page int16 %d, got %d", val, got)
 		}
-		if got := txmgr.GetInt16(ctx, blk, off); got != val {
+		if got, err := txmgr.GetInt16(ctx, blk, off); err != nil {
+			t.Fatalf("GetInt16 failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetInt16 %d, got %d", val, got)
 		}
 		txmgr.Commit(ctx)
@@ -293,7 +307,10 @@ func TestTransaction(t *testing.T) {
 		// start a new transaction to read the page
 		rTx := NewTransactionMgr(fm, lm, bm)
 		rTx.Pin(ctx, blk)
-		got := rTx.GetInt32(ctx, blk, off)
+		got, err := rTx.GetInt32(ctx, blk, off)
+		if err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		}
 		if got != before {
 			t.Errorf("expected value after rollback %d, got %d", before, got)
 		}
@@ -347,7 +364,9 @@ func TestTransaction(t *testing.T) {
 		// verify committed value remains
 		rTx1 := NewTransactionMgr(fm, lm, bm)
 		rTx1.Pin(ctx, blk1)
-		if got := rTx1.GetInt32(ctx, blk1, off1); got != val1 {
+		if got, err := rTx1.GetInt32(ctx, blk1, off1); err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		} else if got != val1 {
 			t.Errorf("expected committed value %d, got %d", val1, got)
 		}
 		rTx1.Commit(ctx)
@@ -355,7 +374,9 @@ func TestTransaction(t *testing.T) {
 		// verify loser write undone (expect 0)
 		rTx2 := NewTransactionMgr(fm, lm, bm)
 		rTx2.Pin(ctx, blk2)
-		if got := rTx2.GetInt32(ctx, blk2, off2); got != 0 {
+		if got, err := rTx2.GetInt32(ctx, blk2, off2); err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		} else if got != 0 {
 			t.Errorf("expected undone value %d, got %d", 0, got)
 		}
 		rTx2.Commit(ctx)
@@ -380,7 +401,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt32(off); got != val {
 			t.Errorf("expected page int32 %d, got %d", val, got)
 		}
-		if got := txmgr.GetInt32(ctx, blk, off); got != val {
+		if got, err := txmgr.GetInt32(ctx, blk, off); err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetInt32 %d, got %d", val, got)
 		}
 		txmgr.Commit(ctx)
@@ -405,7 +428,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetStr(off); got != val {
 			t.Errorf("expected page str %q, got %q", val, got)
 		}
-		if got := txmgr.GetStr(ctx, blk, off); got != val {
+		if got, err := txmgr.GetStr(ctx, blk, off); err != nil {
+			t.Fatalf("GetStr failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetStr %q, got %q", val, got)
 		}
 		txmgr.Commit(ctx)
@@ -430,7 +455,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetBool(off); got != val {
 			t.Errorf("expected page bool %v, got %v", val, got)
 		}
-		if got := txmgr.GetBool(ctx, blk, off); got != val {
+		if got, err := txmgr.GetBool(ctx, blk, off); err != nil {
+			t.Fatalf("GetBool failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetBool %v, got %v", val, got)
 		}
 		txmgr.Commit(ctx)
@@ -455,7 +482,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetDate(off); !got.Equal(val) {
 			t.Errorf("expected page date %v, got %v", val, got)
 		}
-		if got := txmgr.GetDate(ctx, blk, off); !got.Equal(val) {
+		if got, err := txmgr.GetDate(ctx, blk, off); err != nil {
+			t.Fatalf("GetDate failed: %v", err)
+		} else if !got.Equal(val) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
 		txmgr.Commit(ctx)

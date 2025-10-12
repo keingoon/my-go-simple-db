@@ -111,7 +111,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt16(off); got != val {
 			t.Errorf("expected page int16 %d, got %d", val, got)
 		}
-		if got := tx.GetInt16(ctx, blk, off); got != val {
+		if got, err := tx.GetInt16(ctx, blk, off); err != nil {
+			t.Fatalf("GetInt16 failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetInt16 %d, got %d", val, got)
 		}
 		if buff.ModifyingTx() != tx.txnum {
@@ -144,7 +146,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetInt32(off); got != val {
 			t.Errorf("expected page int32 %d, got %d", val, got)
 		}
-		if got := tx.GetInt32(ctx, blk, off); got != val {
+		if got, err := tx.GetInt32(ctx, blk, off); err != nil {
+			t.Fatalf("GetInt32 failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetInt32 %d, got %d", val, got)
 		}
 
@@ -174,7 +178,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetStr(off); got != val {
 			t.Errorf("expected page str %q, got %q", val, got)
 		}
-		if got := tx.GetStr(ctx, blk, off); got != val {
+		if got, err := tx.GetStr(ctx, blk, off); err != nil {
+			t.Fatalf("GetStr failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetStr %q, got %q", val, got)
 		}
 
@@ -204,7 +210,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetBool(off); got != val {
 			t.Errorf("expected page bool %v, got %v", val, got)
 		}
-		if got := tx.GetBool(ctx, blk, off); got != val {
+		if got, err := tx.GetBool(ctx, blk, off); err != nil {
+			t.Fatalf("GetBool failed: %v", err)
+		} else if got != val {
 			t.Errorf("expected GetBool %v, got %v", val, got)
 		}
 
@@ -234,7 +242,9 @@ func TestTransaction(t *testing.T) {
 		if got := buff.Contents().GetDate(off); !got.Equal(val) {
 			t.Errorf("expected page date %v, got %v", val, got)
 		}
-		if got := tx.GetDate(ctx, blk, off); !got.Equal(val) {
+		if got, err := tx.GetDate(ctx, blk, off); err != nil {
+			t.Fatalf("GetDate failed: %v", err)
+		} else if !got.Equal(val) {
 			t.Errorf("expected GetDate %v, got %v", val, got)
 		}
 
