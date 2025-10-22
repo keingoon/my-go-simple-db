@@ -2,6 +2,8 @@ package tx
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -519,5 +521,311 @@ func TestTransaction(t *testing.T) {
 		if txmgr.mybuffers.GetBuffer(blk) != nil {
 			t.Errorf("expected mybuffers to be empty after commit")
 		}
+	})
+
+	// Concurrency conflict tests
+	t.Run("Read vs Write conflict times out", func(t *testing.T) {
+		// reader holds SLock, writer attempts XLock and should time out
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk, err := fm.Append("conflict_rw")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		rTx := NewTransactionMgr(fm, lm, bm)
+		rTx.Pin(ctx, blk)
+		if _, err := rTx.GetInt32(ctx, blk, 0); err != nil { // acquire SLock
+			t.Fatalf("reader GetInt32 failed: %v", err)
+		}
+
+		wTx := NewTransactionMgr(fm, lm, bm)
+		wTx.Pin(ctx, blk)
+
+		// writer should block on XLock and then time out quickly
+		wctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+
+		if err := wTx.SetInt32(wctx, blk, 0, 1, true); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected writer timeout (DeadlineExceeded), got %v", err)
+		}
+		rTx.Commit(ctx)   // cleanup
+		wTx.Rollback(ctx) // cleanup
+	})
+
+	t.Run("Write vs Write conflict times out", func(t *testing.T) {
+		// first writer holds XLock, second writer should time out
+		fm, lm, bm := initMgr(t, "")
+		blk, err := fm.Append("conflict_ww")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		wctx1 := context.Background()
+		wTx1 := NewTransactionMgr(fm, lm, bm)
+		wTx1.Pin(wctx1, blk)
+		if err := wTx1.SetInt32(wctx1, blk, 0, 100, true); err != nil { // acquire XLock
+			t.Fatalf("writer1 SetInt32 failed: %v", err)
+		}
+
+		wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel2()
+		wTx2 := NewTransactionMgr(fm, lm, bm)
+		wTx2.Pin(wctx2, blk)
+
+		if err := wTx2.SetInt32(wctx2, blk, 0, 200, true); err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected writer1 timeout (DeadlineExceeded), got %v", err)
+		}
+
+		// cleanup
+		wTx1.Commit(wctx1)
+		wTx2.Rollback(wctx2)
+	})
+
+	t.Run("Upgrade conflict times out (S->X vs S->X)", func(t *testing.T) {
+		// both transactions hold SLock and try to upgrade to XLock; at least one should time out
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk, err := fm.Append("conflict_upgrade")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		tx1.Pin(ctx, blk)
+		if _, err := tx1.GetInt32(ctx, blk, 0); err != nil { // acquire SLock
+			t.Fatalf("tx1 GetInt32 failed: %v", err)
+		}
+
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		tx2.Pin(ctx, blk)
+		if _, err := tx2.GetInt32(ctx, blk, 0); err != nil { // acquire SLock
+			t.Fatalf("tx2 GetInt32 failed: %v", err)
+		}
+
+		wctx1, cancel1 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel1()
+		err1 := tx1.SetInt32(wctx1, blk, 0, 1, true)
+
+		wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel2()
+		err2 := tx2.SetInt32(wctx2, blk, 0, 2, true)
+
+		// In this implementation both may time out; assert both time out to be strict
+		if err1 == nil || !errors.Is(err1, context.DeadlineExceeded) {
+			t.Fatalf("expected tx1 timeout (DeadlineExceeded), got %v", err1)
+		}
+		if err2 == nil || !errors.Is(err2, context.DeadlineExceeded) {
+			t.Fatalf("expected tx2 timeout (DeadlineExceeded), got %v", err2)
+		}
+
+		// cleanup
+		tx1.Rollback(ctx)
+		tx2.Rollback(ctx)
+	})
+
+	t.Run("Deadlock causes timeout abort in one transaction", func(t *testing.T) {
+		// tx1: S blk1 -> X blk2, tx2: S blk2 -> X blk1; at least one should time out
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk1, err := fm.Append("deadlock_blk1")
+		if err != nil {
+			t.Fatalf("append blk1 failed: %v", err)
+		}
+		blk2, err := fm.Append("deadlock_blk2")
+		if err != nil {
+			t.Fatalf("append blk2 failed: %v", err)
+		}
+
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		tx1.Pin(ctx, blk1)
+		tx1.Pin(ctx, blk2)
+		tx2.Pin(ctx, blk1)
+		tx2.Pin(ctx, blk2)
+
+		if _, err := tx1.GetInt32(ctx, blk1, 0); err != nil { // S blk1
+			t.Fatalf("tx1 SLock blk1 failed: %v", err)
+		}
+		if _, err := tx2.GetInt32(ctx, blk2, 0); err != nil { // S blk2
+			t.Fatalf("tx2 SLock blk2 failed: %v", err)
+		}
+
+		wctx1, cancel1 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel1()
+		wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel2()
+
+		err1 := tx1.SetInt32(wctx1, blk2, 0, 10, true)
+		err2 := tx2.SetInt32(wctx2, blk1, 0, 20, true)
+
+		if (err1 == nil || !errors.Is(err1, context.DeadlineExceeded)) && (err2 == nil || !errors.Is(err2, context.DeadlineExceeded)) {
+			t.Fatalf("expected at least one timeout (DeadlineExceeded), got err1=%v err2=%v", err1, err2)
+		}
+
+		// cleanup
+		tx1.Rollback(ctx)
+		tx2.Rollback(ctx)
+	})
+
+	// Deadlock resolved by rollback (upgrade vs upgrade)
+	t.Run("Deadlock upgrade resolved by rollback", func(t *testing.T) {
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk, err := fm.Append("deadlock_upgrade_blk")
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		tx1.Pin(ctx, blk)
+		tx2.Pin(ctx, blk)
+
+		// both acquire S
+		if _, err := tx1.GetInt32(ctx, blk, 0); err != nil {
+			t.Fatalf("tx1 SLock failed: %v", err)
+		}
+		if _, err := tx2.GetInt32(ctx, blk, 0); err != nil {
+			t.Fatalf("tx2 SLock failed: %v", err)
+		}
+
+		var err1 error
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		// tx1 tries to upgrade and should eventually succeed
+		go func() {
+			defer wg.Done()
+			wctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel1()
+			err1 = tx1.SetInt32(wctx1, blk, 0, 111, true)
+		}()
+
+		// tx2 tries to upgrade, times out quickly, then rolls back in the same goroutine
+		go func() {
+			defer wg.Done()
+			wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel2()
+			_ = tx2.SetInt32(wctx2, blk, 0, 222, true)
+			tx2.Rollback(ctx)
+		}()
+
+		wg.Wait()
+
+		if err1 != nil {
+			t.Fatalf("expected tx1 to succeed after tx2 rollback, got %v", err1)
+		}
+		tx1.Commit(ctx)
+	})
+
+	// Deadlock resolved by rollback (read/write across two blocks)
+	t.Run("Deadlock read/write resolved by rollback", func(t *testing.T) {
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk1, err := fm.Append("deadlock_rw_blk1")
+		if err != nil {
+			t.Fatalf("append blk1 failed: %v", err)
+		}
+		blk2, err := fm.Append("deadlock_rw_blk2")
+		if err != nil {
+			t.Fatalf("append blk2 failed: %v", err)
+		}
+
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		tx1.Pin(ctx, blk1)
+		tx1.Pin(ctx, blk2)
+		tx2.Pin(ctx, blk1)
+		tx2.Pin(ctx, blk2)
+
+		// S on different blocks
+		if _, err := tx1.GetInt32(ctx, blk1, 0); err != nil {
+			t.Fatalf("tx1 S blk1 failed: %v", err)
+		}
+		if _, err := tx2.GetInt32(ctx, blk2, 0); err != nil {
+			t.Fatalf("tx2 S blk2 failed: %v", err)
+		}
+
+		var err1 error
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() { // tx1 tries X on blk2 and should succeed after tx2 rollback
+			defer wg.Done()
+			wctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel1()
+			err1 = tx1.SetInt32(wctx1, blk2, 0, 10, true)
+		}()
+
+		go func() { // tx2 tries X on blk1, times out and rolls back
+			defer wg.Done()
+			wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel2()
+			_ = tx2.SetInt32(wctx2, blk1, 0, 20, true)
+			tx2.Rollback(ctx)
+		}()
+
+		wg.Wait()
+
+		if err1 != nil {
+			t.Fatalf("expected tx1 to proceed after tx2 rollback, got %v", err1)
+		}
+		tx1.Commit(ctx)
+	})
+
+	// Deadlock resolved by rollback (write/write across two blocks)
+	t.Run("Deadlock write/write resolved by rollback", func(t *testing.T) {
+		fm, lm, bm := initMgr(t, "")
+		ctx := context.Background()
+		blk1, err := fm.Append("deadlock_ww_blk1")
+		if err != nil {
+			t.Fatalf("append blk1 failed: %v", err)
+		}
+		blk2, err := fm.Append("deadlock_ww_blk2")
+		if err != nil {
+			t.Fatalf("append blk2 failed: %v", err)
+		}
+
+		tx1 := NewTransactionMgr(fm, lm, bm)
+		tx2 := NewTransactionMgr(fm, lm, bm)
+		tx1.Pin(ctx, blk1)
+		tx1.Pin(ctx, blk2)
+		tx2.Pin(ctx, blk1)
+		tx2.Pin(ctx, blk2)
+
+		// X on different blocks
+		if err := tx1.SetInt32(ctx, blk1, 0, 100, true); err != nil {
+			t.Fatalf("tx1 X blk1 failed: %v", err)
+		}
+		if err := tx2.SetInt32(ctx, blk2, 0, 200, true); err != nil {
+			t.Fatalf("tx2 X blk2 failed: %v", err)
+		}
+
+		var err1 error
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() { // tx1 tries X on blk2 and should succeed after tx2 rollback
+			defer wg.Done()
+			wctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel1()
+			err1 = tx1.SetInt32(wctx1, blk2, 4, 101, true)
+		}()
+
+		go func() { // tx2 tries X on blk1, times out and rolls back
+			defer wg.Done()
+			wctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel2()
+			_ = tx2.SetInt32(wctx2, blk1, 4, 201, true)
+			tx2.Rollback(ctx)
+		}()
+
+		wg.Wait()
+
+		if err1 != nil {
+			t.Fatalf("expected tx1 to proceed after tx2 rollback, got %v", err1)
+		}
+		tx1.Commit(ctx)
 	})
 }

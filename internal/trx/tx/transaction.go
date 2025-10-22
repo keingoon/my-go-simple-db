@@ -14,10 +14,6 @@ import (
 	"github.com/keingoon/simpledb/internal/trx/recovery"
 )
 
-const (
-	EndOfFile = -1
-)
-
 var atomicNextTxNum int32 = 0
 
 type TransactionMgr struct {

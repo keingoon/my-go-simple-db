@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	maxtime         = 10000
-	shardNum        = 128
+	maxtime  = 10000
+	shardNum = 128
+	// W=bit31, U=bit30, Readers=bits[0..29]
 	wLockedMask     = int32(^(1<<31 - 1))
-	readerCountMask = int32(1<<31 - 1) // last 31bits are reader count
+	upgradeMask     = int32(1 << 30)
+	readerCountMask = int32((1 << 30) - 1)
 	maxSpinCount    = 30
 )
 
@@ -30,15 +32,16 @@ type waiter struct {
 	ch         chan struct{}
 	mode       LockMode
 	upgrade    bool
+	upgraded   bool
 	prev, next *waiter
 }
 
-func newWaiter(mode LockMode, upgrade bool) *waiter {
-	return &waiter{ch: make(chan struct{}), mode: mode, upgrade: upgrade, prev: nil, next: nil}
+func newWaiter(mode LockMode, upgrade bool, upgraded bool) *waiter {
+	return &waiter{ch: make(chan struct{}), mode: mode, upgrade: upgrade, upgraded: upgraded, prev: nil, next: nil}
 }
 
 type lockShard struct {
-	state       int32 // first 1bit is write/read flag, last 31bits are reader count
+	state       int32 // first 1bit is write/read flag, second 1bit is upgrade flag, last 31bits are reader count
 	rHead       *waiter
 	rTail       *waiter
 	wHead       *waiter
@@ -83,6 +86,19 @@ func (shard *lockShard) enqueueUpgrade(w *waiter) {
 		shard.upgradeTail.next = w
 		shard.upgradeTail = w
 	}
+}
+
+func (shard *lockShard) enqueueUpgradeFront(w *waiter) {
+	// ensure clean links
+	w.prev, w.next = nil, nil
+	if shard.upgradeHead == nil {
+		shard.upgradeHead = w
+		shard.upgradeTail = w
+		return
+	}
+	w.next = shard.upgradeHead
+	shard.upgradeHead.prev = w
+	shard.upgradeHead = w
 }
 
 func (shard *lockShard) dequeueRead(w *waiter) {
@@ -203,7 +219,8 @@ func (locktbl *LockTable) SLock(ctx context.Context, blk *file.BlockId, rwaiter 
 			default:
 			}
 			old := atomic.LoadInt32(&lockShard.state)
-			if (old & wLockedMask) != 0 {
+			// block SLock when W lock is held or an upgrade is reserved
+			if (old&wLockedMask) != 0 || (old&upgradeMask) != 0 {
 				continue
 			}
 			new := old + 1
@@ -248,19 +265,57 @@ func (locktbl *LockTable) XLock(ctx context.Context, blk *file.BlockId, wwaiter 
 			// タイムアウトしたらエラーを返す
 			select {
 			case <-ctx.Done():
+				// upgrade待ちがある場合は、CASでupgradeビットをクリアする
+				if wwaiter.upgrade && wwaiter.upgraded {
+					for {
+						cur := atomic.LoadInt32(&lockShard.state)
+						if (cur & upgradeMask) == 0 {
+							break
+						}
+						next := cur &^ upgradeMask
+						if atomic.CompareAndSwapInt32(&lockShard.state, cur, next) {
+							break
+						}
+					}
+					wwaiter.upgraded = false
+				}
 				return ctx.Err()
 			default:
 			}
 			old := atomic.LoadInt32(&lockShard.state)
 			locked := old & wLockedMask
+			upgrade := old & upgradeMask
 			readers := old & readerCountMask
-			// forbid if (W locked) or (readers > 0 and not (upgrade && readers == 1))
-			if (locked != 0) || (readers > 0 && !(wwaiter.upgrade && readers == 1)) {
+
+			// upgradeの場合
+			if wwaiter.upgrade && !wwaiter.upgraded {
+				if upgrade != 0 {
+					continue
+				}
+				new := old | upgradeMask
+				if !atomic.CompareAndSwapInt32(&lockShard.state, old, new) {
+					continue
+				}
+				wwaiter.upgraded = true
+			}
+
+			if locked != 0 {
 				continue
 			}
+
 			new := old | wLockedMask
 			if wwaiter.upgrade {
-				new -= 1
+				if readers != 1 {
+					continue
+				}
+				if wwaiter.upgraded {
+					new -= 1
+					new &= ^upgradeMask
+				}
+			} else {
+				if readers > 0 {
+					continue
+				}
 			}
 			if atomic.CompareAndSwapInt32(&lockShard.state, old, new) {
 				return nil
@@ -279,9 +334,15 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 
 	lockShard.mu.Lock()
 	if wwaiter.upgrade {
-		// Xlockを呼ばれたときにSlockを既に保持しているため、待機列から外す必要はない。
-		lockShard.enqueueUpgrade(wwaiter)
+		if wwaiter.upgraded {
+			// 予約済みアップグレードはupgrade列の先頭に配置
+			lockShard.enqueueUpgradeFront(wwaiter)
+		} else {
+			// 予約未取得は通常のupgrade列末尾へ
+			lockShard.enqueueUpgrade(wwaiter)
+		}
 	} else {
+		// 通常のwrite待機
 		lockShard.enqueueWrite(wwaiter)
 	}
 	lockShard.mu.Unlock()
@@ -294,6 +355,20 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 		} else {
 			lockShard.dequeueWrite(wwaiter)
 		}
+		// upgrade待ちがある場合は、CASでupgradeビットをクリアする
+		if wwaiter.upgrade && wwaiter.upgraded {
+			for {
+				cur := atomic.LoadInt32(&lockShard.state)
+				if (cur & upgradeMask) == 0 {
+					break
+				}
+				next := cur &^ upgradeMask
+				if atomic.CompareAndSwapInt32(&lockShard.state, cur, next) {
+					break
+				}
+			}
+			wwaiter.upgraded = false
+		}
 		lockShard.mu.Unlock()
 		return ctx.Err()
 	case <-wwaiter.ch:
@@ -301,11 +376,10 @@ func (locktbl *LockTable) slowXLock(ctx context.Context, blk *file.BlockId, wwai
 	}
 }
 
-func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
+func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId, owner *waiter) error {
 	lockShard := locktbl.getShard(blk)
 	old := atomic.LoadInt32(&lockShard.state)
 	prevLocked := old & wLockedMask
-	prevReaders := old & readerCountMask
 
 	var updated int32
 	if prevLocked != 0 {
@@ -325,17 +399,28 @@ func (locktbl *LockTable) Unlock(ctx context.Context, blk *file.BlockId) error {
 	// - readers==0 の場合は write → read の順
 	// - readers>=1 の場合は read を起こす（スループット重視）
 	if updated&wLockedMask == 0 {
-		// 最優先: 直前が単一読者で upgrade 待ちがいる
-		if prevLocked == 0 && prevReaders == 1 && lockShard.upgradeHead != nil {
-			lockShard.wakeUpgradeWaiter()
-			return nil
+		// Safety: 自分の予約（owner.upgraded）だけをクリア
+		if owner != nil && owner.upgrade && owner.upgraded {
+			for {
+				cur := atomic.LoadInt32(&lockShard.state)
+				if (cur & upgradeMask) == 0 {
+					break
+				}
+				next := cur &^ upgradeMask
+				if atomic.CompareAndSwapInt32(&lockShard.state, cur, next) {
+					break
+				}
+			}
+			owner.upgraded = false
 		}
-
+		// 最優先: 直前が単一読者で upgrade 待ちがいる
 		readers := updated & readerCountMask
 		if readers == 0 {
 			if ww := lockShard.wakeWriteWaiter(); ww == nil {
 				lockShard.wakeAllReadWaiters()
 			}
+		} else if readers == 1 && lockShard.upgradeHead != nil {
+			lockShard.wakeUpgradeWaiter()
 		} else {
 			lockShard.wakeAllReadWaiters()
 		}
@@ -388,7 +473,7 @@ func (conMgr *ConcurrencyMgr) SLock(ctx context.Context, blk *file.BlockId) erro
 		return nil
 	}
 
-	rWaiter := newWaiter(readMode, false)
+	rWaiter := newWaiter(readMode, false, false)
 	if err := LockTbl.SLock(ctx, blk, rWaiter); err != nil {
 		return fmt.Errorf("slock abort exception: %w", err)
 	}
@@ -409,7 +494,7 @@ func (conMgr *ConcurrencyMgr) XLock(ctx context.Context, blk *file.BlockId) erro
 	// upgrade 判定のため現在の状態を参照
 	upgrade := conMgr.hasSLock(blk)
 
-	wwaiter := newWaiter(writeMode, upgrade)
+	wwaiter := newWaiter(writeMode, upgrade, false)
 	if err := LockTbl.XLock(ctx, blk, wwaiter); err != nil {
 		return fmt.Errorf("xlock abort exception: %w", err)
 	}
@@ -424,9 +509,10 @@ func (conMgr *ConcurrencyMgr) XLock(ctx context.Context, blk *file.BlockId) erro
 func (conMgr *ConcurrencyMgr) Unlock(ctx context.Context, blk *file.BlockId) error {
 	shard := conMgr.getShard(blk)
 	shard.mu.Lock()
+	owner := shard.locks[*blk]
 	delete(shard.locks, *blk)
 	shard.mu.Unlock()
-	return LockTbl.Unlock(ctx, blk)
+	return LockTbl.Unlock(ctx, blk, owner)
 }
 
 func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
@@ -435,7 +521,8 @@ func (conMgr *ConcurrencyMgr) Release(ctx context.Context) error {
 		shard.mu.Lock()
 		for blk := range shard.locks {
 			shard.mu.Unlock()
-			if err := LockTbl.Unlock(ctx, &blk); err != nil {
+			waiter := shard.locks[blk]
+			if err := LockTbl.Unlock(ctx, &blk, waiter); err != nil {
 				return fmt.Errorf("release abort exception: %w", err)
 			}
 			shard.mu.Lock()
