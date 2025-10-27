@@ -10,6 +10,11 @@ import (
 	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
+var activeTrxTable map[int32]struct {
+	status  int32
+	lastLsn int32
+}
+
 type RecoveryMgr struct {
 	lm       *log.LogMgr
 	bm       *buffer.BufferMgr
