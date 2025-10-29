@@ -9,6 +9,22 @@ import (
 
 const (
 	int32Size = 4
+	int16Size = 2
+)
+
+// Log file header (block 0) layout:
+// magic(4) | version(2) | pageSize(4) | lastCheckpointLSN(4) | reserved(...)
+const (
+	headerMagicOffset             = 0
+	headerVersionOffset           = headerMagicOffset + int32Size
+	headerPageSizeOffset          = headerVersionOffset + int16Size
+	headerLastCheckpointLSNOffset = headerPageSizeOffset + int32Size
+)
+
+const (
+	// "LOGH" as bytes in little-endian: 'L','O','G','H'
+	logHeaderMagic   int32 = 0x48474F4C
+	logHeaderVersion int16 = 1
 )
 
 type LogMgr struct {
@@ -18,11 +34,11 @@ type LogMgr struct {
 	currentblk   *file.BlockId
 	latestLSN    int32
 	lastSavedLSN int32
-	mu           sync.Mutex
+	mu           sync.RWMutex
 }
 
 func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
-	logMgr := &LogMgr{fm, logfile, nil, nil, 0, 0, sync.Mutex{}}
+	logMgr := &LogMgr{fm: fm, logfile: logfile, logpage: nil, currentblk: nil, latestLSN: 0, lastSavedLSN: 0}
 
 	b := make([]byte, fm.BlockSize())
 	logpage := file.NewLogPage(b)
@@ -32,17 +48,60 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 	}
 	logMgr.logpage = logpage
 
-	var currentblk *file.BlockId
 	if logsize == 0 {
-		currentblk, err = logMgr.appendNewBlock()
+		// ログヘッダーブロックの初期化
+		hdrBlk, err := fm.Append(logfile)
 		if err != nil {
-			return nil, fmt.Errorf("could not new log mgr: %w", err)
+			return nil, fmt.Errorf("could not append header block: %w", err)
+		}
+		if hdrBlk.Number() != 0 {
+			return nil, fmt.Errorf("unexpected header block number: %d", hdrBlk.Number())
+		}
+		hdr := file.NewPage(fm.BlockSize())
+		if err := hdr.SetInt32(headerMagicOffset, logHeaderMagic); err != nil {
+			return nil, fmt.Errorf("could not write header magic: %w", err)
+		}
+		if err := hdr.SetInt16(headerVersionOffset, logHeaderVersion); err != nil {
+			return nil, fmt.Errorf("could not write header version: %w", err)
+		}
+		if err := hdr.SetInt32(headerPageSizeOffset, fm.BlockSize()); err != nil {
+			return nil, fmt.Errorf("could not write header page size: %w", err)
+		}
+		if err := hdr.SetInt32(headerLastCheckpointLSNOffset, 0); err != nil {
+			return nil, fmt.Errorf("could not write header last checkpoint lsn: %w", err)
+		}
+		if err := fm.Write(hdrBlk, hdr); err != nil {
+			return nil, fmt.Errorf("could not write header block: %w", err)
 		}
 	} else {
-		currentblk = file.NewBlockId(logfile, logsize-1)
-		fm.Read(currentblk, logpage)
+		// ログヘッダーブロックの値チェックバリデーション
+		hdrBlk := file.NewBlockId(logfile, 0)
+		hdr := file.NewPage(fm.BlockSize())
+		if err := fm.Read(hdrBlk, hdr); err != nil {
+			return nil, fmt.Errorf("could not read header block: %w", err)
+		}
+		if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
+			return nil, fmt.Errorf("invalid log header magic")
+		}
+		if hdr.GetInt32(headerPageSizeOffset) != fm.BlockSize() {
+			return nil, fmt.Errorf("mismatched page size in header")
+		}
 	}
-	logMgr.currentblk = currentblk
+
+	// ログデータブロックの追加
+	if logsize <= 1 {
+		currentblk, err := logMgr.appendNewBlock()
+		if err != nil {
+			return nil, fmt.Errorf("could not create first data block: %w", err)
+		}
+		logMgr.currentblk = currentblk
+	} else {
+		currentblk := file.NewBlockId(logfile, logsize-1)
+		if err := fm.Read(currentblk, logpage); err != nil {
+			return nil, fmt.Errorf("could not load current log block: %w", err)
+		}
+		logMgr.currentblk = currentblk
+	}
 
 	return logMgr, nil
 }
@@ -118,7 +177,8 @@ func NewLogIterator(fm *file.FileMgr, blk *file.BlockId) *LogIterator {
 
 func (logIter *LogIterator) HasNext() bool {
 	fileMgr, blk, currentpos := logIter.fm, logIter.blk, logIter.currentpos
-	return currentpos < fileMgr.BlockSize() || blk.Number() > 0
+	// ログのheaderブロックを除いてnext判定
+	return currentpos < fileMgr.BlockSize() || blk.Number() > 1
 }
 
 func (logIter *LogIterator) Next() []byte {
@@ -138,4 +198,40 @@ func (logIter *LogIterator) moveToBlock(blk *file.BlockId) {
 	fileMgr.Read(blk, p)
 	logIter.boundary = p.GetInt32(0)
 	logIter.currentpos = logIter.boundary
+}
+
+func (logMgr *LogMgr) ReadMasterLSN() (int32, error) {
+	logMgr.mu.RLock()
+	defer logMgr.mu.RUnlock()
+
+	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
+	hdr := file.NewPage(logMgr.fm.BlockSize())
+	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
+		return 0, fmt.Errorf("could not read header block: %w", err)
+	}
+	if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
+		return 0, fmt.Errorf("invalid log header magic")
+	}
+	return hdr.GetInt32(headerLastCheckpointLSNOffset), nil
+}
+
+func (logMgr *LogMgr) WriteMasterLSN(lsn int32) error {
+	logMgr.mu.Lock()
+	defer logMgr.mu.Unlock()
+
+	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
+	hdr := file.NewPage(logMgr.fm.BlockSize())
+	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
+		return fmt.Errorf("could not read header block: %w", err)
+	}
+	if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
+		return fmt.Errorf("invalid log header magic")
+	}
+	if err := hdr.SetInt32(headerLastCheckpointLSNOffset, lsn); err != nil {
+		return fmt.Errorf("could not set master LSN: %w", err)
+	}
+	if err := logMgr.fm.Write(hdrBlk, hdr); err != nil {
+		return fmt.Errorf("could not write header block: %w", err)
+	}
+	return nil
 }

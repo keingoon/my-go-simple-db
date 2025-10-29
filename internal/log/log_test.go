@@ -41,7 +41,7 @@ func TestLogMgr(t *testing.T) {
 			logfile   = "logfile"
 		)
 
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		fileMgr, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,9 +53,58 @@ func TestLogMgr(t *testing.T) {
 			t.Errorf("expected empty block %v, got %v", *expectedpage, *logMgr.logpage)
 		}
 
-		expectedblk := file.NewBlockId(logfile, 0)
+		expectedblk := file.NewBlockId(logfile, 1)
 		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
 			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
+		}
+
+		// verify header block (block 0)
+		hdr := file.NewPage(blocksize)
+		if err := fileMgr.Read(file.NewBlockId(logfile, 0), hdr); err != nil {
+			t.Fatal(err)
+		}
+		if got := hdr.GetInt32(headerMagicOffset); got != logHeaderMagic {
+			t.Errorf("expected header magic %v, got %v", logHeaderMagic, got)
+		}
+		if got := hdr.GetInt16(headerVersionOffset); got != logHeaderVersion {
+			t.Errorf("expected header version %v, got %v", logHeaderVersion, got)
+		}
+		if got := hdr.GetInt32(headerPageSizeOffset); got != blocksize {
+			t.Errorf("expected header page size %v, got %v", blocksize, got)
+		}
+		if got := hdr.GetInt32(headerLastCheckpointLSNOffset); got != 0 {
+			t.Errorf("expected header last checkpoint LSN %v, got %v", 0, got)
+		}
+	})
+
+	t.Run("NewLogMgr with invalid header", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		// Prepare a file with a bad header (magic mismatch)
+		fileMgr, err := file.NewFileMgr(t.TempDir(), blocksize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blk0, err := fileMgr.Append(logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blk0.Number() != 0 {
+			t.Fatalf("expected header block number 0, got %v", blk0.Number())
+		}
+		bad := file.NewPage(blocksize)
+		// leave magic as 0 (invalid), optionally fill other fields
+		if err := fileMgr.Write(blk0, bad); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := NewLogMgr(fileMgr, logfile); err == nil {
+			t.Fatalf("expected error due to invalid header magic, got nil")
 		}
 	})
 
@@ -175,7 +224,7 @@ func TestLogMgr(t *testing.T) {
 			latestRec = rec
 		}
 
-		expectedblk := file.NewBlockId(logfile, 1)
+		expectedblk := file.NewBlockId(logfile, 2)
 		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
 			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
 		}
@@ -211,7 +260,7 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectedBlk := file.NewBlockId(logfile, 1)
+		expectedBlk := file.NewBlockId(logfile, 2)
 		blk, err := logMgr.appendNewBlock()
 		if err != nil {
 			t.Fatal(err)
@@ -235,7 +284,6 @@ func TestLogMgr(t *testing.T) {
 	})
 
 	t.Run("flush after Append 1 rec", func(t *testing.T) {
-		// TODO: test
 		t.Parallel()
 
 		const (
@@ -269,6 +317,69 @@ func TestLogMgr(t *testing.T) {
 
 		if logMgr.lastSavedLSN != 1 {
 			t.Errorf("expected lastSavedLSN %v, got %v", 1, logMgr.lastSavedLSN)
+		}
+	})
+
+	// Master LSN tests
+	t.Run("ReadMasterLSN at first", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		masterLsn, err := logMgr.ReadMasterLSN()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if masterLsn != 0 {
+			t.Errorf("expected master LSN %v, got %v", 0, masterLsn)
+		}
+	})
+
+	t.Run("WriteMasterLSN after reopen", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		dir := t.TempDir()
+		fileMgr, logMgr, err := initFileLogMgr(dir, blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var want int32 = 42
+		if err := logMgr.WriteMasterLSN(want); err != nil {
+			t.Fatal(err)
+		}
+
+		masterLsn, err := logMgr.ReadMasterLSN()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if masterLsn != want {
+			t.Errorf("expected master LSN %v, got %v", want, masterLsn)
+		}
+
+		reopened, err := NewLogMgr(fileMgr, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		masterLsn2, err := reopened.ReadMasterLSN()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if masterLsn2 != want {
+			t.Errorf("expected master LSN after reopen %v, got %v", want, masterLsn2)
 		}
 	})
 }
@@ -475,8 +586,8 @@ func TestLogIterator(t *testing.T) {
 		}
 
 		iter := logMgr.Iterater()
-		// currentBlk number is 1, nextBlk number is 0
-		nextBlk := file.NewBlockId(logfile, 0)
+		// currentBlk number is 2, nextBlk number is 1 (header block is 0)
+		nextBlk := file.NewBlockId(logfile, 1)
 		iter.moveToBlock(nextBlk)
 
 		p := iter.p
@@ -496,3 +607,5 @@ func TestLogIterator(t *testing.T) {
 		}
 	})
 }
+
+// (moved master LSN tests into TestLogMgr)
