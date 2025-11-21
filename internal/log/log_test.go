@@ -608,4 +608,234 @@ func TestLogIterator(t *testing.T) {
 	})
 }
 
+func TestFragmentRecord(t *testing.T) {
+	t.Parallel()
+
+	// 大きなレコードを作成するヘルパー（ブロックサイズを超える）
+	// 注意: Appendが自動的に先頭に長さを付与するため、ここでは長さを含めない
+	createLargeLogRec := func(size int) []byte {
+		rec := make([]byte, size)
+		// データを埋める（先頭に長さは含めない。Appendが自動的に付与する）
+		for i := 0; i < size; i++ {
+			rec[i] = byte(i % 256)
+		}
+		return rec
+	}
+
+	t.Run("正常形: first->cont->last が正しく復元できる", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// ブロックサイズを超える大きなレコードを作成
+		largeRec := createLargeLogRec(int(blocksize) + 100)
+		lsn, err := logMgr.Append(largeRec)
+		if err != nil {
+			t.Fatalf("Append failed: %v", err)
+		}
+		if lsn <= 0 {
+			t.Errorf("expected LSN > 0, got %d", lsn)
+		}
+
+		// イテレータで読み戻し
+		iter := logMgr.Iterater()
+		if !iter.HasNext() {
+			t.Fatal("expected at least one record")
+		}
+
+		reconstructed := iter.Next()
+		if !bytes.Equal(largeRec, reconstructed) {
+			t.Errorf("reconstructed record mismatch: expected len=%d, got len=%d", len(largeRec), len(reconstructed))
+		}
+	})
+
+	t.Run("正常形: 複数ブロックにまたがる大きなレコード", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 3ブロック分の大きなレコードを作成
+		largeRec := createLargeLogRec(int(blocksize) * 3)
+		if _, err := logMgr.Append(largeRec); err != nil {
+			t.Fatalf("Append failed: %v", err)
+		}
+
+		iter := logMgr.Iterater()
+		reconstructed := iter.Next()
+		if !bytes.Equal(largeRec, reconstructed) {
+			t.Errorf("reconstructed record mismatch: expected len=%d, got len=%d", len(largeRec), len(reconstructed))
+		}
+	})
+
+	t.Run("異常形: lastがない（チェイン末尾欠け）", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// まず通常レコードを1件追加
+		rec1 := createLogRec(1, "normal1")
+		if _, err := logMgr.Append(rec1); err != nil {
+			t.Fatal(err)
+		}
+
+		// LAST を書かずに FIRST + CONT だけを人工的に挿入する
+		totalLen := 100
+		dataFirst := bytes.Repeat([]byte{1}, 40)
+		dataCont := bytes.Repeat([]byte{2}, 40)
+
+		firstFrag := logMgr.buildFragment(dataFirst, totalLen, true /* first */, false /* isLast */)
+		if err := logMgr.ensureAndWrite(firstFrag); err != nil {
+			t.Fatalf("ensureAndWrite(firstFrag) failed: %v", err)
+		}
+
+		contFrag := logMgr.buildFragment(dataCont, totalLen, false /* first */, false /* isLast */)
+		if err := logMgr.ensureAndWrite(contFrag); err != nil {
+			t.Fatalf("ensureAndWrite(contFrag) failed: %v", err)
+		}
+
+		// その後に別の通常レコードを追加
+		rec2 := createLogRec(2, "normal2")
+		if _, err := logMgr.Append(rec2); err != nil {
+			t.Fatal(err)
+		}
+
+		iter := logMgr.Iterater()
+
+		// 直近の通常レコード rec2 が最初に返る
+		got := iter.Next()
+		if !bytes.Equal(rec2, got) {
+			t.Errorf("expected latest record %v, got %v", rec2, got)
+		}
+
+		// 次の Next 呼び出しでは、壊れたフラグメントチェインをスキップして rec1 が返る
+		got = iter.Next()
+		if !bytes.Equal(rec1, got) {
+			t.Errorf("expected older record %v, got %v", rec1, got)
+		}
+
+		// それ以上の論理レコードは存在しない
+		if next := iter.Next(); next != nil {
+			t.Errorf("expected no more logical records, got %v", next)
+		}
+	})
+
+	t.Run("正常形: 複数のフラグメントレコードが混在", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 通常レコード
+		rec1 := createLogRec(1, "normal1")
+		if _, err := logMgr.Append(rec1); err != nil {
+			t.Fatal(err)
+		}
+
+		// 大きなレコード1
+		largeRec1 := createLargeLogRec(int(blocksize) + 100)
+		if _, err := logMgr.Append(largeRec1); err != nil {
+			t.Fatal(err)
+		}
+
+		// 通常レコード
+		rec2 := createLogRec(2, "normal2")
+		if _, err := logMgr.Append(rec2); err != nil {
+			t.Fatal(err)
+		}
+
+		// 大きなレコード2
+		largeRec2 := createLargeLogRec(int(blocksize) + 200)
+		if _, err := logMgr.Append(largeRec2); err != nil {
+			t.Fatal(err)
+		}
+
+		// 逆順で読み戻し（Iteratorは最新から読む）
+		iter := logMgr.Iterater()
+		got2 := iter.Next()
+		if !bytes.Equal(largeRec2, got2) {
+			t.Errorf("largeRec2 mismatch")
+		}
+
+		gotRec2 := iter.Next()
+		if !bytes.Equal(rec2, gotRec2) {
+			t.Errorf("rec2 mismatch")
+		}
+
+		got1 := iter.Next()
+		if !bytes.Equal(largeRec1, got1) {
+			t.Errorf("largeRec1 mismatch")
+		}
+
+		gotRec1 := iter.Next()
+		if !bytes.Equal(rec1, gotRec1) {
+			t.Errorf("rec1 mismatch")
+		}
+	})
+
+	t.Run("正常形: 単一ブロックに収まるレコードは非フラグメントとして扱われる", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 単一ブロックに収まるレコード
+		smallRec := createLogRec(1, "small")
+		if _, err := logMgr.Append(smallRec); err != nil {
+			t.Fatal(err)
+		}
+
+		iter := logMgr.Iterater()
+		reconstructed := iter.Next()
+		if !bytes.Equal(smallRec, reconstructed) {
+			t.Errorf("small record mismatch")
+		}
+
+		// フラグメントではないことを確認（先頭がfragMagicでない）
+		if len(reconstructed) >= 4 {
+			p := file.NewLogPage(reconstructed)
+			if p.GetInt32(0) == fragMagic {
+				t.Errorf("small record should not be fragmented")
+			}
+		}
+	})
+}
+
 // (moved master LSN tests into TestLogMgr)
