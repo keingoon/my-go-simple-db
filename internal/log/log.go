@@ -12,17 +12,6 @@ const (
 	int16Size = 2
 )
 
-// 1つの物理レコード内に格納するフラグメントのレイアウト:
-// FIRST: [fragMagic:int32][flags:int32=1][totalLen:int32] + データ断片
-// CONT:  [fragMagic:int32][flags:int32=2]                 + データ断片
-// LAST:  [fragMagic:int32][flags:int32=3]                 + データ断片
-const (
-	fragMagic     int32 = 0x47415246 // "FRAG"（リトルエンディアン）
-	fragFlagFirst int32 = 1
-	fragFlagCont  int32 = 2
-	fragFlagLast  int32 = 3
-)
-
 // ログファイルヘッダー (ブロック0) のレイアウト:
 // magic(4) | version(2) | pageSize(4) | lastCheckpointLSN(4) | reserved(...)
 const (
@@ -36,6 +25,23 @@ const (
 	// "LOGH" as bytes in little-endian: 'L','O','G','H'
 	logHeaderMagic   int32 = 0x48474F4C
 	logHeaderVersion int16 = 1
+)
+
+// 1つの物理レコード内に格納するフラグメントのレイアウト:
+// FIRST: fragMagic(4) | flags(4) | totalLen(4) | payload
+// CONT:  fragMagic(4) | flags(4) | payload
+// LAST:  fragMagic(4) | flags(4) | payload
+const (
+	fragMagic int32 = 0x47415246 // "FRAG"（リトルエンディアン）
+	fragFirst int32 = 1
+	fragCont  int32 = 2
+	fragLast  int32 = 3
+
+	fragMagicOffset         int32 = 0
+	fragFlagsOffset         int32 = int32Size
+	fragFirstTotalLenOffset int32 = fragFlagsOffset + int32Size
+	fragFirstPayloadOffset  int32 = fragFirstTotalLenOffset + int32Size
+	fragPayloadOffset       int32 = fragFlagsOffset + int32Size
 )
 
 type LogMgr struct {
@@ -123,9 +129,13 @@ func (LogMgr *LogMgr) Flush(lsn int32) {
 	}
 }
 
-func (logMgr *LogMgr) Iterater() *LogIterator {
-	logMgr.flush()
-	return NewLogIterator(logMgr.fm, logMgr.currentblk)
+func (logMgr *LogMgr) Iterater(startLSN int32) (*LogIterator, error) {
+	logsize, err := logMgr.fm.Length(logMgr.logfile)
+	if err != nil {
+		return nil, fmt.Errorf("could not get log size: %w", err)
+	}
+	endBlkNum := logsize - 1
+	return newLogIterator(logMgr.fm, logMgr.logfile, startLSN, endBlkNum), nil
 }
 
 func (logMgr *LogMgr) Append(logrec []byte) (int32, error) {
@@ -135,44 +145,64 @@ func (logMgr *LogMgr) Append(logrec []byte) (int32, error) {
 	if logMgr.canFitAsSingle(logrec) {
 		return logMgr.writeSingleRecord(logrec)
 	}
-	return logMgr.writeFragmented(logrec)
+	return logMgr.writeFragmentedRecord(logrec)
 }
 
-// canFitAsSingle はレコードが単一ブロックに収まるか判定する
+func (logMgr *LogMgr) ReadRecordAt(lsn int32) ([]byte, error) {
+	logsize, err := logMgr.fm.Length(logMgr.logfile)
+	if err != nil {
+		return nil, fmt.Errorf("could not get log size: %w", err)
+	}
+	endBlkNum := logsize - 1
+	iter := newLogIterator(logMgr.fm, logMgr.logfile, lsn, endBlkNum)
+	if !iter.HasNext() {
+		return nil, fmt.Errorf("could not read record at lsn: %d", lsn)
+	}
+	rec := iter.Next()
+
+	return rec, nil
+}
+
+// レコードが単一ブロックに収まるか判定する
 func (logMgr *LogMgr) canFitAsSingle(logrec []byte) bool {
 	maxBytesInEmptyBlock := int(logMgr.fm.BlockSize()) - 2*int(int32Size)
 	return len(logrec) <= maxBytesInEmptyBlock
 }
 
-// writeSingleRecord は単一レコードとして書き込む
+// 単一レコードとして書き込む
 func (logMgr *LogMgr) writeSingleRecord(logrec []byte) (int32, error) {
 	if err := logMgr.ensureAndWrite(logrec); err != nil {
 		return 0, fmt.Errorf("could not append logrec: %w", err)
 	}
-	logMgr.latestLSN += 1
 	return logMgr.latestLSN, nil
 }
 
-// writeFragmented はフラグメントとして書き込む
-func (logMgr *LogMgr) writeFragmented(logrec []byte) (int32, error) {
+// フラグメントとして書き込む
+func (logMgr *LogMgr) writeFragmentedRecord(logrec []byte) (int32, error) {
 	totalLen := len(logrec)
 	pos := 0
 	first := true
 
+	var firstRecLsn int32
 	for pos < totalLen {
 		chunk, err := logMgr.writeFragmentChunk(logrec, pos, totalLen, first)
 		if err != nil {
 			return 0, err
 		}
+
+		// 最初のフラグメントのLSNを取得
+		if first {
+			firstRecLsn = logMgr.latestLSN
+		}
+
 		pos += chunk
 		first = false
 	}
 
-	logMgr.latestLSN += 1
-	return logMgr.latestLSN, nil
+	return firstRecLsn, nil
 }
 
-// writeFragmentChunk は1つのフラグメントチャンクを書き込む
+// 1つのフラグメントチャンクを書き込む
 func (logMgr *LogMgr) writeFragmentChunk(logrec []byte, pos int, totalLen int, first bool) (int, error) {
 	chunkLimit := logMgr.calculateChunkLimit(first)
 	if chunkLimit <= 0 {
@@ -195,44 +225,44 @@ func (logMgr *LogMgr) writeFragmentChunk(logrec []byte, pos int, totalLen int, f
 	return chunk, nil
 }
 
-// buildFragment はフラグメントのバイト列を構築する
+// フラグメントのバイト列を構築する
 func (logMgr *LogMgr) buildFragment(chunk []byte, totalLen int, first bool, isLast bool) []byte {
-	var headerLen int
+	var headerLen int32
 	if first {
-		headerLen = int32Size * 3 // magic + flags + totalLen
+		headerLen = fragFirstPayloadOffset
 	} else {
-		headerLen = int32Size * 2 // magic + flags
+		headerLen = fragPayloadOffset
 	}
 
-	frag := make([]byte, headerLen+len(chunk))
+	frag := make([]byte, int(headerLen)+len(chunk))
 	fp := file.NewLogPage(frag)
 	fp.SetInt32(0, fragMagic)
 
 	if first {
-		fp.SetInt32(int32Size, fragFlagFirst)
-		fp.SetInt32(int32Size*2, int32(totalLen))
-		copy(frag[int32Size*3:], chunk)
+		fp.SetInt32(fragFlagsOffset, fragFirst)
+		fp.SetInt32(fragFirstTotalLenOffset, int32(totalLen))
+		copy(frag[fragFirstPayloadOffset:], chunk)
 	} else {
 		if isLast {
-			fp.SetInt32(int32Size, fragFlagLast)
+			fp.SetInt32(fragFlagsOffset, fragLast)
 		} else {
-			fp.SetInt32(int32Size, fragFlagCont)
+			fp.SetInt32(fragFlagsOffset, fragCont)
 		}
-		copy(frag[int32Size*2:], chunk)
+		copy(frag[fragPayloadOffset:], chunk)
 	}
 	return frag
 }
 
-// calculateChunkLimit は現在のブロックで書き込めるチャンクの最大サイズを計算する
+// 現在のブロックで書き込めるチャンクの最大サイズを計算する
 func (logMgr *LogMgr) calculateChunkLimit(first bool) int {
 	boundary := logMgr.logpage.GetInt32(0)
-	var headerLen int
+	var headerLen int32
 	if first {
-		headerLen = int32Size * 3
+		headerLen = fragFirstPayloadOffset
 	} else {
-		headerLen = int32Size * 2
+		headerLen = fragPayloadOffset
 	}
-	return int(boundary) - 2*int(int32Size) - headerLen
+	return int(logMgr.fm.BlockSize() - (boundary + int32Size + headerLen))
 }
 
 // minInt は2つの整数の最小値を返す
@@ -249,7 +279,7 @@ func (logMgr *LogMgr) appendNewBlock() (*file.BlockId, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not append new log block: %w", err)
 	}
-	logpage.SetInt32(0, fileMgr.BlockSize())
+	logpage.SetInt32(0, int32Size)
 	fileMgr.Write(blk, logpage)
 	return blk, nil
 }
@@ -262,7 +292,7 @@ func (logMgr *LogMgr) flush() {
 
 func (logMgr *LogMgr) canFit(bytesNeeded int) bool {
 	boundary := logMgr.logpage.GetInt32(0)
-	return boundary-int32(bytesNeeded) >= int32Size
+	return boundary+int32(bytesNeeded) <= logMgr.fm.BlockSize()
 }
 
 func (logMgr *LogMgr) ensureNewBlock() error {
@@ -283,40 +313,68 @@ func (logMgr *LogMgr) ensureAndWrite(rec []byte) error {
 		}
 	}
 	boundary := logMgr.logpage.GetInt32(0)
-	recpos := boundary - int32(bytesNeeded)
-	logMgr.logpage.SetBytes(recpos, rec)
+	logMgr.logpage.SetBytes(boundary, rec)
+
+	recpos := boundary + int32(bytesNeeded)
 	logMgr.logpage.SetInt32(0, recpos)
+
+	blockSize := logMgr.fm.BlockSize()
+	blkNumber := logMgr.currentblk.Number()
+	logMgr.latestLSN = blockSize*blkNumber + boundary
 	return nil
 }
 
 type LogIterator struct {
 	fm         *file.FileMgr
 	blk        *file.BlockId
+	endBlk     *file.BlockId
 	p          *file.Page
 	currentpos int32
 	boundary   int32
 }
 
-func NewLogIterator(fm *file.FileMgr, blk *file.BlockId) *LogIterator {
+func newLogIterator(fm *file.FileMgr, logfile string, startLsn, endBlkNum int32) *LogIterator {
 	b := make([]byte, fm.BlockSize())
 	p := file.NewLogPage(b)
 
-	logIterator := &LogIterator{fm, blk, p, 0, 0}
-	logIterator.moveToBlock(blk)
+	blockSize := fm.BlockSize()
+
+	startBlkNum := startLsn / blockSize
+	startOffset := startLsn % blockSize
+
+	startBlk := file.NewBlockId(logfile, startBlkNum)
+	endBlk := file.NewBlockId(logfile, endBlkNum)
+
+	logIterator := &LogIterator{fm, startBlk, endBlk, p, 0, 0}
+	logIterator.moveToBlock(startBlk, startOffset)
 	return logIterator
 }
 
 func (logIter *LogIterator) HasNext() bool {
-	fileMgr, blk, currentpos := logIter.fm, logIter.blk, logIter.currentpos
-	// ログのheaderブロックを除いてnext判定
-	return currentpos < fileMgr.BlockSize() || blk.Number() > 1
+	blk, currentpos, boundary := logIter.blk, logIter.currentpos, logIter.boundary
+
+	if blk.Number() > logIter.endBlk.Number() {
+		return false
+	}
+
+	if blk.Number() == logIter.endBlk.Number() && currentpos >= boundary {
+		return false
+	}
+
+	return true
 }
 
 func (logIter *LogIterator) Next() []byte {
-	for logIter.HasNext() {
+	for {
 		logIter.ensureCurrentBlock()
 
+		// これ以上読める論理レコードが無い場合
+		if !logIter.HasNext() {
+			return nil
+		}
+
 		rec := logIter.readPhysicalRecord()
+		logIter.nextToRecordPosition(len(rec))
 
 		// フラグメントかどうか判定
 		if !logIter.isFragment(rec) {
@@ -326,14 +384,18 @@ func (logIter *LogIterator) Next() []byte {
 
 		flags := logIter.getFragmentFlags(rec)
 		switch flags {
-		case fragFlagLast:
-			// LAST を起点にフラグメント連鎖を逆向きに復元する
-			if reconstructed, ok := logIter.reconstructFragmentChain(rec); ok {
+		case fragFirst:
+			// FIRST から順方向にチェインを復元
+			totalLen, ok := logIter.validateFragmentHeader(rec)
+			if !ok {
+				continue
+			}
+			if reconstructed, ok := logIter.reconstructFragmentChain(rec, totalLen); ok {
 				return reconstructed
 			}
 			// 復元に失敗した場合は、この論理レコードをスキップして次の論理レコード探索を続ける
 			continue
-		case fragFlagCont, fragFlagFirst:
+		case fragCont, fragLast:
 			// CONT や FIRST が単独で出てきた場合は孤立フラグメントとみなしスキップ
 			continue
 		default:
@@ -341,123 +403,95 @@ func (logIter *LogIterator) Next() []byte {
 			return rec
 		}
 	}
-
-	// これ以上読める論理レコードが無い場合
-	return nil
 }
 
-// readPhysicalRecord は物理レコード（1件）のペイロードを読み出す
-// 戻り値は Page 内部バッファとは独立したスライスであり、
-// 呼び出し側で保持しても、その後の moveToBlock による内容破壊は起こらない。
+// 物理レコード（1件）のペイロードを読み出す
 func (logIter *LogIterator) readPhysicalRecord() []byte {
 	raw := logIter.p.GetBytes(logIter.currentpos)
-	logIter.currentpos += int32Size + int32(len(raw))
-
 	// Page 内部バッファのエイリアスを避けるため、必ずディープコピーして返す
 	rec := make([]byte, len(raw))
 	copy(rec, raw)
 	return rec
 }
 
-// reconstructFragmentChain は LAST フラグメントから始まるフラグメント連鎖を逆向きに復元する
-// 戻り値: (復元された論理レコード, 成功したか)
-func (logIter *LogIterator) reconstructFragmentChain(lastRec []byte) ([]byte, bool) {
-	// LAST から始めて、前方に向かって CONT... → FIRST を探索する
-	frags := [][]byte{lastRec}
+// 次のレコードの位置を計算する
+func (logIter *LogIterator) nextToRecordPosition(recLen int) int32 {
+	logIter.currentpos += int32Size + int32(recLen)
+	return logIter.currentpos
+}
 
-	for logIter.HasNext() {
+// FIRST フラグメントから始まるフラグメント連鎖を順方向に復元する
+// 戻り値: (復元された論理レコード, 成功したか)
+func (logIter *LogIterator) reconstructFragmentChain(firstRec []byte, totalLen int32) ([]byte, bool) {
+	buf := make([]byte, totalLen)
+	bufLen := 0
+
+	copy(buf[bufLen:], firstRec[fragFirstPayloadOffset:])
+	bufLen += len(firstRec) - int(fragFirstPayloadOffset)
+
+	for bufLen < int(totalLen) {
 		logIter.ensureCurrentBlock()
 
-		part := logIter.readPhysicalRecord()
+		partRec := logIter.readPhysicalRecord()
 		// フラグメントでなければ連鎖が途切れたとみなす
-		if !logIter.isFragment(part) {
+		if !logIter.isFragment(partRec) {
 			return nil, false
 		}
+		// フラグメントの場合はレコードの位置を次に進める
+		logIter.nextToRecordPosition(len(partRec))
 
-		flags := logIter.getFragmentFlags(part)
+		flags := logIter.getFragmentFlags(partRec)
 		switch flags {
-		case fragFlagCont:
-			// CONT は連鎖の一部として追加
-			frags = append(frags, part)
-		case fragFlagFirst:
-			// FIRST に到達したら totalLen を取得して復元
-			totalLen, ok := logIter.validateFragmentHeader(part)
-			if !ok {
-				return nil, false
-			}
-			frags = append(frags, part) // FIRST も含める
-
-			buf := make([]byte, totalLen)
-			sum := 0
-
-			// frags は [LAST, CONT..., FIRST] の逆順なので、逆向きにコピーしていく
-			for i := len(frags) - 1; i >= 0; i-- {
-				fragment := frags[i]
-				flag := logIter.getFragmentFlags(fragment)
-
-				var dataOff int32
-				if flag == fragFlagFirst {
-					dataOff = int32Size * 3 // magic + flags + totalLen
-				} else {
-					dataOff = int32Size * 2 // magic + flags
-				}
-
-				dataLen := len(fragment) - int(dataOff)
-				if sum+dataLen > int(totalLen) {
-					// はみ出し（形式不正）
-					return nil, false
-				}
-				copy(buf[sum:], fragment[dataOff:])
-				sum += dataLen
-			}
-
-			if sum != int(totalLen) {
-				// 未完成
-				return nil, false
-			}
-			return buf, true
-		default:
-			// LAST が二度出てきた、または未知のフラグが出た場合は不正
+		case fragFirst:
 			return nil, false
+		case fragCont:
+			copy(buf[bufLen:], partRec[fragPayloadOffset:])
+			bufLen += len(partRec) - int(fragPayloadOffset)
+		case fragLast:
+			copy(buf[bufLen:], partRec[fragPayloadOffset:])
+			bufLen += len(partRec) - int(fragPayloadOffset)
+			if bufLen == int(totalLen) {
+				return buf, true
+			}
 		}
 	}
 
-	// FIRST に到達しないままログが終わった場合は未完成とみなす
+	// Last に到達せずに途中で指定の長さを超えてしまった場合は失敗とみなす
 	return nil, false
 }
 
-func (logIter *LogIterator) moveToBlock(blk *file.BlockId) {
+func (logIter *LogIterator) moveToBlock(blk *file.BlockId, offset int32) {
 	fileMgr, p := logIter.fm, logIter.p
 	fileMgr.Read(blk, p)
 	logIter.boundary = p.GetInt32(0)
-	logIter.currentpos = logIter.boundary
+	logIter.currentpos = offset
 }
 
-// ensureCurrentBlock は現在位置がブロック境界に達している場合、前のブロックに移動する
+// 現在位置がブロック境界に達している場合、次のブロックに移動する
 func (logIter *LogIterator) ensureCurrentBlock() {
-	if logIter.currentpos == logIter.fm.BlockSize() && logIter.blk.Number() > 1 {
-		newBlk := file.NewBlockId(logIter.blk.FileName(), logIter.blk.Number()-1)
+	if logIter.currentpos >= logIter.boundary && logIter.blk.Number() < logIter.endBlk.Number() {
+		newBlk := file.NewBlockId(logIter.blk.FileName(), logIter.blk.Number()+1)
 		logIter.blk = newBlk
-		logIter.moveToBlock(newBlk)
+		logIter.moveToBlock(newBlk, int32Size)
 	}
 }
 
 // isFragment はレコードがフラグメントかどうかを判定する
 func (logIter *LogIterator) isFragment(rec []byte) bool {
-	if len(rec) < int32Size*2 {
+	if len(rec) < int(fragPayloadOffset) {
 		return false
 	}
 	pr := file.NewLogPage(rec)
 	return pr.GetInt32(0) == fragMagic
 }
 
-// getFragmentFlags はフラグメントレコードのフラグを取得する
+// フラグメントレコードのフラグを取得する
 func (logIter *LogIterator) getFragmentFlags(rec []byte) int32 {
 	pr := file.NewLogPage(rec)
 	return pr.GetInt32(int32Size)
 }
 
-// validateFragmentHeader は FIRST フラグメントのヘッダを検証し、totalLen を返す
+// FIRST フラグメントのヘッダを検証し、totalLen を返す
 // 戻り値: (totalLen, 検証成功したか)
 func (logIter *LogIterator) validateFragmentHeader(rec []byte) (int32, bool) {
 	if len(rec) < int32Size*3 {
