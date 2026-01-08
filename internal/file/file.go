@@ -52,51 +52,85 @@ const (
 	int32Size         = 4
 	int16Size         = 2
 	boolSize          = 1
-	dateSize          = 8 // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
-	maxStrBytesLength = 1 // US ASCII のみを使用するので1文字1バイト想定
+	dateSize          = 8  // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
+	maxStrBytesLength = 1  // US ASCII のみを使用するので1文字1バイト想定
+	pageHeaderSize    = 64 // ページヘッダーのサイズ
+	pageTypeOffset    = 0
+	pageLSNOffset     = int32Size
+)
+
+const (
+	heap int32 = iota
+	btreeInternal
+	btreeLeaf
 )
 
 type Page struct {
-	bb []byte
+	bb         []byte
+	headerSize int32
+	pageType   int32
 }
 
 func NewPage(blocksize int32) *Page {
-	return &Page{bb: make([]byte, blocksize)}
+	return &Page{bb: make([]byte, blocksize), headerSize: pageHeaderSize, pageType: heap}
 }
 
 func NewLogPage(b []byte) *Page {
-	return &Page{bb: b}
+	// Log pages don't have a page header; offsets are absolute within the given slice.
+	return &Page{bb: b, headerSize: 0, pageType: heap}
+}
+
+func (p *Page) GetPageType() int32 {
+	b := p.bb[pageTypeOffset : pageTypeOffset+int32Size]
+	return int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24
+}
+
+func (p *Page) GetPageLSN() int32 {
+	b := p.bb[pageLSNOffset : pageLSNOffset+int32Size]
+	return int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24
+}
+
+func (p *Page) SetPageLSN(pageLSN int32) error {
+	p.bb[pageLSNOffset] = byte(pageLSN)
+	p.bb[pageLSNOffset+1] = byte(pageLSN >> 8)
+	p.bb[pageLSNOffset+2] = byte(pageLSN >> 16)
+	p.bb[pageLSNOffset+3] = byte(pageLSN >> 24)
+	return nil
 }
 
 func (p *Page) GetInt32(offset int32) int32 {
-	b := p.bb[offset : offset+int32Size]
+	dataOffset := p.headerSize + offset
+	b := p.bb[dataOffset : dataOffset+int32Size]
 	return int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24
 }
 
 func (p *Page) SetInt32(offset int32, val int32) error {
-	if offset < 0 || offset+int32Size > int32(len(p.bb)) {
-		return fmt.Errorf("set int32 offset out bound from 0 to %d", len(p.bb)-1)
+	dataOffset := p.headerSize + offset
+	if offset < 0 || dataOffset+int32Size > int32(len(p.bb)) {
+		return fmt.Errorf("set int32 offset out bound from 0 to %d", int32(len(p.bb))-1-p.headerSize)
 	}
-	p.bb[offset] = byte(val)
-	p.bb[offset+1] = byte(val >> 8)
-	p.bb[offset+2] = byte(val >> 16)
-	p.bb[offset+3] = byte(val >> 24)
+	p.bb[dataOffset] = byte(val)
+	p.bb[dataOffset+1] = byte(val >> 8)
+	p.bb[dataOffset+2] = byte(val >> 16)
+	p.bb[dataOffset+3] = byte(val >> 24)
 	return nil
 }
 
 func (p *Page) GetBytes(offset int32) []byte {
 	n := p.GetInt32(offset)
-	return p.bb[offset+int32Size : offset+int32Size+n]
+	dataOffset := p.headerSize + offset
+	return p.bb[dataOffset+int32Size : dataOffset+int32Size+n]
 }
 
 func (p *Page) SetBytes(offset int32, b []byte) error {
-	if offset < 0 || offset+int32Size+int32(len(b)) > int32(len(p.bb)) {
-		return fmt.Errorf("set bytes offset out bound from 0 to %d", len(p.bb)-1)
+	dataOffset := p.headerSize + offset
+	if offset < 0 || dataOffset+int32Size+int32(len(b)) > int32(len(p.bb)) {
+		return fmt.Errorf("set bytes offset out bound from 0 to %d", int32(len(p.bb))-1-p.headerSize)
 	}
 	if err := p.SetInt32(offset, int32(len(b))); err != nil {
 		return fmt.Errorf("set bytes err: %w", err)
 	}
-	copy(p.bb[offset+int32Size:offset+int32Size+int32(len(b))], b)
+	copy(p.bb[dataOffset+int32Size:dataOffset+int32Size+int32(len(b))], b)
 	return nil
 }
 
@@ -112,56 +146,62 @@ func (p *Page) SetStr(offset int32, s string) error {
 }
 
 func (p *Page) GetInt16(offset int32) int16 {
-	b := p.bb[offset : offset+int16Size]
+	dataOffset := p.headerSize + offset
+	b := p.bb[dataOffset : dataOffset+int16Size]
 	return int16(b[0]) | int16(b[1])<<8
 }
 
 func (p *Page) SetInt16(offset int32, val int16) error {
-	if offset < 0 || offset+int16Size > int32(len(p.bb)) {
-		return fmt.Errorf("set int16 offset out bound from 0 to %d", len(p.bb)-1)
+	dataOffset := p.headerSize + offset
+	if offset < 0 || dataOffset+int16Size > int32(len(p.bb)) {
+		return fmt.Errorf("set int16 offset out bound from 0 to %d", int32(len(p.bb))-1-p.headerSize)
 	}
-	p.bb[offset] = byte(val)
-	p.bb[offset+1] = byte(val >> 8)
+	p.bb[dataOffset] = byte(val)
+	p.bb[dataOffset+1] = byte(val >> 8)
 	return nil
 }
 
 func (p *Page) GetBool(offset int32) bool {
-	return p.bb[offset] == byte(1)
+	dataOffset := p.headerSize + offset
+	return p.bb[dataOffset] == byte(1)
 }
 
 func (p *Page) SetBool(offset int32, val bool) error {
-	if offset < 0 || offset+boolSize > int32(len(p.bb)) {
-		return fmt.Errorf("set bool offset out bound from 0 to %d", len(p.bb)-1)
+	dataOffset := p.headerSize + offset
+	if offset < 0 || dataOffset+boolSize > int32(len(p.bb)) {
+		return fmt.Errorf("set bool offset out bound from 0 to %d", int32(len(p.bb))-1-p.headerSize)
 	}
 	if val {
-		p.bb[offset] = byte(1)
+		p.bb[dataOffset] = byte(1)
 	} else {
-		p.bb[offset] = byte(0)
+		p.bb[dataOffset] = byte(0)
 	}
 
 	return nil
 }
 
 func (p *Page) GetDate(offset int32) time.Time {
-	b := p.bb[offset : offset+dateSize]
+	dataOffset := p.headerSize + offset
+	b := p.bb[dataOffset : dataOffset+dateSize]
 	unix := int64(b[0]) | int64(b[1])<<8 | int64(b[2])<<16 | int64(b[3])<<24 | int64(b[4])<<32 | int64(b[5])<<40 | int64(b[6])<<48 | int64(b[7])<<56
 	// UTCとして時刻は扱う
 	return time.Unix(unix, 0).In(time.UTC)
 }
 
 func (p *Page) SetDate(offset int32, t time.Time) error {
-	if offset < 0 || offset+dateSize > int32(len(p.bb)) {
-		return fmt.Errorf("set date offset out bound from 0 to %d", len(p.bb)-1)
+	dataOffset := p.headerSize + offset
+	if offset < 0 || dataOffset+dateSize > int32(len(p.bb)) {
+		return fmt.Errorf("set date offset out bound from 0 to %d", int32(len(p.bb))-1-p.headerSize)
 	}
 	unix := t.Unix()
-	p.bb[offset] = byte(unix)
-	p.bb[offset+1] = byte(unix >> 8)
-	p.bb[offset+2] = byte(unix >> 16)
-	p.bb[offset+3] = byte(unix >> 24)
-	p.bb[offset+4] = byte(unix >> 32)
-	p.bb[offset+5] = byte(unix >> 40)
-	p.bb[offset+6] = byte(unix >> 48)
-	p.bb[offset+7] = byte(unix >> 56)
+	p.bb[dataOffset] = byte(unix)
+	p.bb[dataOffset+1] = byte(unix >> 8)
+	p.bb[dataOffset+2] = byte(unix >> 16)
+	p.bb[dataOffset+3] = byte(unix >> 24)
+	p.bb[dataOffset+4] = byte(unix >> 32)
+	p.bb[dataOffset+5] = byte(unix >> 40)
+	p.bb[dataOffset+6] = byte(unix >> 48)
+	p.bb[dataOffset+7] = byte(unix >> 56)
 	return nil
 }
 

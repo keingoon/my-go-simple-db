@@ -10,6 +10,36 @@ import (
 func TestPage(t *testing.T) {
 	t.Parallel()
 
+	// Page has a fixed header region; offsets in Page APIs are relative to the data region.
+	const maxDataOffset = 256 - 1 - pageHeaderSize
+
+	t.Run("get page type", func(t *testing.T) {
+		t.Parallel()
+		p := NewPage(256)
+		if p.GetPageType() != heap {
+			t.Errorf("expected %d, got %d", heap, p.GetPageType())
+		}
+	})
+
+	t.Run("get page lsn", func(t *testing.T) {
+		t.Parallel()
+		p := NewPage(256)
+		if p.GetPageLSN() != 0 {
+			t.Errorf("expected %d, got %d", 0, p.GetPageLSN())
+		}
+	})
+
+	t.Run("set page lsn", func(t *testing.T) {
+		t.Parallel()
+		p := NewPage(256)
+		if err := p.SetPageLSN(1000); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+		if p.GetPageLSN() != 1000 {
+			t.Errorf("expected %d, got %d", 1000, p.GetPageLSN())
+		}
+	})
+
 	t.Run("set int32 val 0 offset", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
@@ -43,7 +73,7 @@ func TestPage(t *testing.T) {
 			val    = int32(1000)
 			offset = int32(254)
 		)
-		var expectedErr = fmt.Errorf("set int32 offset out bound from 0 to %d", 255)
+		var expectedErr = fmt.Errorf("set int32 offset out bound from 0 to %d", maxDataOffset)
 
 		if err := p.SetInt32(offset, val); err.Error() != expectedErr.Error() {
 			t.Errorf("expected %v, got %v", expectedErr, err)
@@ -79,7 +109,7 @@ func TestPage(t *testing.T) {
 		p := NewPage(256)
 		val := []byte{104, 101, 108, 108, 111, 119, 111, 114, 108, 100}
 		const offset = int32(254)
-		var expectedErr = fmt.Errorf("set bytes offset out bound from 0 to %d", 255)
+		var expectedErr = fmt.Errorf("set bytes offset out bound from 0 to %d", maxDataOffset)
 
 		if err := p.SetBytes(offset, val); err.Error() != expectedErr.Error() {
 			t.Errorf("expected %v, got %v", expectedErr, err)
@@ -120,7 +150,7 @@ func TestPage(t *testing.T) {
 			offset = int32(254)
 		)
 		var (
-			setBytesErr = fmt.Errorf("set bytes offset out bound from 0 to %d", 255)
+			setBytesErr = fmt.Errorf("set bytes offset out bound from 0 to %d", maxDataOffset)
 			expectedErr = fmt.Errorf("set str err: %w", setBytesErr)
 		)
 
@@ -162,7 +192,7 @@ func TestPage(t *testing.T) {
 			val    = int16(1000)
 			offset = int32(255)
 		)
-		var expectedErr = fmt.Errorf("set int16 offset out bound from 0 to %d", 255)
+		var expectedErr = fmt.Errorf("set int16 offset out bound from 0 to %d", maxDataOffset)
 
 		if err := p.SetInt16(offset, val); err.Error() != expectedErr.Error() {
 			t.Errorf("expected %v, got %v", expectedErr, err)
@@ -202,7 +232,7 @@ func TestPage(t *testing.T) {
 			val    = true
 			offset = int32(256)
 		)
-		var expectedErr = fmt.Errorf("set bool offset out bound from 0 to %d", 255)
+		var expectedErr = fmt.Errorf("set bool offset out bound from 0 to %d", maxDataOffset)
 
 		if err := p.SetBool(offset, val); err.Error() != expectedErr.Error() {
 			t.Errorf("expected %v, got %v", expectedErr, err)
@@ -242,7 +272,7 @@ func TestPage(t *testing.T) {
 			val    = time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC)
 			offset = int32(254)
 		)
-		var expectedErr = fmt.Errorf("set date offset out bound from 0 to %d", 255)
+		var expectedErr = fmt.Errorf("set date offset out bound from 0 to %d", maxDataOffset)
 
 		if err := p.SetDate(offset, val); err.Error() != expectedErr.Error() {
 			t.Errorf("expected %v, got %v", expectedErr, err)
