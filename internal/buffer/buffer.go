@@ -17,12 +17,13 @@ type Buffer struct {
 	blk      *file.BlockId
 	pins     int32
 	txnum    int32
-	lsn      int32
+	recLSN   int32
+	pageLSN  int32
 }
 
 func NewBuffer(fm *file.FileMgr, lm *log.LogMgr) *Buffer {
 	p := file.NewPage(fm.BlockSize())
-	return &Buffer{fm, lm, p, nil, 0, -1, -1}
+	return &Buffer{fm, lm, p, nil, 0, -1, -1, -1}
 }
 
 func (buff *Buffer) Contents() *file.Page {
@@ -36,7 +37,11 @@ func (buff *Buffer) Block() *file.BlockId {
 func (buff *Buffer) SetModified(txnum int32, lsn int32) {
 	buff.txnum = txnum
 	if lsn > 0 {
-		buff.lsn = lsn
+		buff.contents.SetPageLSN(lsn)
+		buff.pageLSN = lsn
+	}
+	if buff.recLSN == -1 {
+		buff.recLSN = lsn
 	}
 }
 
@@ -57,11 +62,12 @@ func (buff *Buffer) assignToBlock(blk *file.BlockId) {
 }
 
 func (buff *Buffer) flush() {
-	fm, lm, contents, blk, txnum, lsn := buff.fm, buff.lm, buff.contents, buff.blk, buff.txnum, buff.lsn
+	fm, lm, contents, blk, txnum, pageLSN := buff.fm, buff.lm, buff.contents, buff.blk, buff.txnum, buff.pageLSN
 	if txnum >= 0 {
-		lm.Flush(lsn)
+		lm.Flush(pageLSN)
 		fm.Write(blk, contents)
-		buff.txnum -= 1
+		buff.txnum = -1
+		buff.recLSN = -1
 	}
 }
 
@@ -212,9 +218,12 @@ func (buffMgr *BufferMgr) Pin(ctx context.Context, blk *file.BlockId) (*Buffer, 
 	buff = buffMgr.tryToPin(blk)
 
 	for buff == nil {
+		// ロック中に現在のwaitChを確定
+		waitCh := buffMgr.waitCh
 		buffMgr.mu.Unlock()
+
 		select {
-		case <-buffMgr.waitCh:
+		case <-waitCh:
 			buffMgr.mu.Lock()
 			buff = buffMgr.tryToPin(blk)
 		case <-ctx.Done():

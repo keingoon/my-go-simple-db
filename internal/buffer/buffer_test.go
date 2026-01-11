@@ -70,8 +70,8 @@ func TestBuffer(t *testing.T) {
 			t.Errorf("expected txnum %v, got %v", -1, buff.txnum)
 		}
 
-		if buff.lsn != -1 {
-			t.Errorf("expected lsn %v, got %v", -1, buff.lsn)
+		if buff.pageLSN != -1 {
+			t.Errorf("expected pageLSN %v, got %v", -1, buff.pageLSN)
 		}
 	})
 
@@ -133,8 +133,8 @@ func TestBuffer(t *testing.T) {
 		if buff.txnum != txnum {
 			t.Errorf("expected txnum %v, got %v", txnum, buff.txnum)
 		}
-		if buff.lsn != lsn {
-			t.Errorf("expected lsn %v, got %v", lsn, buff.lsn)
+		if buff.pageLSN != lsn {
+			t.Errorf("expected pageLSN %v, got %v", lsn, buff.pageLSN)
 		}
 	})
 
@@ -157,8 +157,8 @@ func TestBuffer(t *testing.T) {
 		if buff.txnum != txnum {
 			t.Errorf("expected txnum %v, got %v", txnum, buff.txnum)
 		}
-		if buff.lsn != -1 {
-			t.Errorf("expected lsn %v, got %v", -1, buff.lsn)
+		if buff.pageLSN != -1 {
+			t.Errorf("expected pageLSN %v, got %v", -1, buff.pageLSN)
 		}
 	})
 
@@ -301,10 +301,12 @@ func TestBuffer(t *testing.T) {
 	t.Run("flush after write log and data", func(t *testing.T) {
 		t.Parallel()
 		const (
-			blocksize = int32(256)
-			logfile   = "logfile"
-			filename  = "testfile"
-			txnum     = 1
+			blocksize     = int32(256)
+			logfile       = "logfile"
+			filename      = "testfile"
+			txnum         = 1
+			startBoundary = int32Size
+			startLSN      = int32(blocksize + startBoundary)
 		)
 
 		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
@@ -334,7 +336,10 @@ func TestBuffer(t *testing.T) {
 		buff.SetModified(txnum, lsn)
 		buff.flush()
 
-		iter := lm.Iterater()
+		iter, err := lm.Iterater(startLSN)
+		if err != nil {
+			t.Fatal(err)
+		}
 		logrecGeted := iter.Next()
 		if !bytes.Equal(logrecGeted, logrec) {
 			t.Errorf("expected log flushed rec %v, got %v", logrec, logrecGeted)
@@ -349,8 +354,8 @@ func TestBuffer(t *testing.T) {
 			t.Errorf("expected flushed page %v, got %v", *contents, *filePage)
 		}
 
-		if buff.txnum != txnum-1 {
-			t.Errorf("expected txnum %v, got %v", txnum-1, buff.txnum)
+		if buff.txnum != -1 {
+			t.Errorf("expected txnum %v, got %v", -1, buff.txnum)
 		}
 	})
 
@@ -791,8 +796,8 @@ func TestBufferMgr(t *testing.T) {
 			t.Errorf("expected flushed page %v, got %v", *emptyP, *p2)
 		}
 
-		if buff1.txnum != txnum1-1 {
-			t.Errorf("expected txnum %v, got %v", txnum1-1, buff1.txnum)
+		if buff1.txnum != -1 {
+			t.Errorf("expected txnum %v, got %v", -1, buff1.txnum)
 		}
 
 		if buff2.txnum != txnum2 {
@@ -1007,8 +1012,6 @@ func TestBufferMgr(t *testing.T) {
 			numwaits  = 3
 			txnum     = 1
 		)
-		var wg sync.WaitGroup
-		ctx := context.Background()
 
 		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
 		if err != nil {
@@ -1016,72 +1019,118 @@ func TestBufferMgr(t *testing.T) {
 		}
 		bufferMgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 
-		errCh := make(chan error, 4)
-		wg.Add(4)
+		// 複数blkをファイルに書き込む
 		blkList := []*file.BlockId{
-			file.NewBlockId(filename, 0), // このblkがunpinされた後pinされるのでflushされる
+			file.NewBlockId(filename, 0), // このblkがunpin対象
 			file.NewBlockId(filename, 1),
 			file.NewBlockId(filename, 2),
 			file.NewBlockId(filename, 3),
 		}
-		// blkList分、ディスクに書き込む
 		for i := 0; i < len(blkList)-1; i++ {
 			if _, err := fm.Append(filename); err != nil {
 				t.Fatal(err)
 			}
 		}
-		var targetP *file.Page
-		for i := 0; i < 4; i++ {
-			go func() {
-				logrec := createLogRec(int32(i+1), "record")
-				lsn, err := lm.Append(logrec)
-				if err != nil {
-					errCh <- err
-					return
-				}
 
-				blk := blkList[i]
-				buff, err := bufferMgr.Pin(ctx, blk)
-				if err != nil {
-					errCh <- err
-					return
-				}
-				buffPage := buff.Contents()
-				buffPage.SetInt32(0, 1)
-				buffPage.SetStr(int32Size, "record")
-				buff.SetModified(txnum, lsn)
+		// blk0~2の数分Pinする
+		var firstBuff *Buffer
+		var expectedPage = file.NewPage(blocksize)
+		for i := 0; i < len(blkList)-1; i++ {
+			logrec := createLogRec(int32(i+1), "record")
+			lsn, err := lm.Append(logrec)
+			if err != nil {
+				return
+			}
 
-				if i == 0 {
-					targetP = buffPage
-					bufferMgr.Unpin(ctx, buff)
-				}
+			blk := blkList[i]
+			buff, err := bufferMgr.Pin(context.Background(), blk)
+			if err != nil {
+				return
+			}
 
-				wg.Done()
-			}()
-		}
+			// 更新
+			buffPage := buff.Contents()
+			buffPage.SetInt32(0, 1)
+			buffPage.SetStr(int32Size, "record")
+			buff.SetModified(txnum, lsn)
 
-		wg.Wait()
-		close(errCh)
-
-		pinTimeoutErr := errors.New("buffer abort exception")
-		for err := range errCh {
-			if err.Error() == pinTimeoutErr.Error() {
-				t.Errorf("expected buff error %v, got %v", nil, err)
-			} else {
-				t.Fatal(err)
+			if i == 0 {
+				firstBuff = buff
+				expectedPage.SetPageLSN(lsn)
+				expectedPage.SetInt32(0, 1)
+				expectedPage.SetStr(int32Size, "record")
 			}
 		}
 
+		startPinCh := make(chan struct{}, 1)
+		endPinCh := make(chan struct{}, 1)
+		errCh := make(chan error, 1)
+		// blk3のPinを実施
+		go func() {
+			// blk3のPinが完了したことを通知
+			defer close(endPinCh)
+
+			logrec := createLogRec(int32(len(blkList)), "record")
+			lsn, err := lm.Append(logrec)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			// blk3のPinが開始されたことを通知
+			close(startPinCh)
+
+			buff, err := bufferMgr.Pin(context.Background(), blkList[len(blkList)-1])
+			if err != nil {
+				errCh <- err
+				return
+			}
+			buffPage := buff.Contents()
+			buffPage.SetInt32(0, 1)
+			buffPage.SetStr(int32Size, "record")
+			buff.SetModified(txnum, lsn)
+		}()
+
+		// blk3のPinが開始されるのを待つ
+		<-startPinCh
+
+		// blk0のunpinを実施
+		bufferMgr.Unpin(context.Background(), firstBuff)
+
+		// blk3のPinが完了するのを待つ
+		<-endPinCh
+
+		// buffer abort exceptionが発生していないこと
+		select {
+		case pinErr := <-errCh:
+			if pinErr != nil {
+				pinTimeoutErr := errors.New("buffer abort exception")
+				if pinErr.Error() == pinTimeoutErr.Error() {
+					t.Errorf("expected buff error %v, got %v", nil, pinErr)
+				} else {
+					t.Fatal(pinErr)
+				}
+			}
+		default:
+		}
+
+		// numAvailable（空きバッファ数）が0になっていること
 		if bufferMgr.numAvailable != 0 {
 			t.Errorf("expected buff numAvailable %v, got %v", 0, bufferMgr.numAvailable)
 		}
 
+		// 最初にpinしたblkの内容がflushされていること
 		p := file.NewPage(blocksize)
 		if err := fm.Read(blkList[0], p); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(*p, *targetP) {
-			t.Errorf("expected flush page %v, got %v", *targetP, *p)
+		if !reflect.DeepEqual(*p, *expectedPage) {
+			t.Errorf("expected flush page %v, got %v", *expectedPage, *p)
+		}
+
+		// 残りのroutineのunpinを実施
+		for i := 0; i < len(bufferMgr.bufferpool); i++ {
+			bufferMgr.Unpin(context.Background(), bufferMgr.bufferpool[i])
 		}
 	})
 
