@@ -344,6 +344,71 @@ func TestLogMgr(t *testing.T) {
 		}
 	})
 
+	t.Run("ReadRecordAt after Append 1 rec and Flush", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rec := createLogRec(1, logrecord)
+		if _, err := logMgr.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.Flush(logMgr.latestLSN)
+
+		recGeted, err := logMgr.ReadRecordAt(logMgr.lastSavedLSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(rec, recGeted) {
+			t.Errorf("expected rec %v, got %v", rec, recGeted)
+		}
+	})
+
+	t.Run("ReadRecordAt after Append 20 rec and Flush", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			logrecord = "logrecord"
+			count     = 20
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var latestRec []byte
+		for i := 0; i < count; i++ {
+			rec := createLogRec(int32(i+1), logrecord)
+			if _, err := logMgr.Append(rec); err != nil {
+				t.Fatal(err)
+			}
+			latestRec = rec
+		}
+
+		logMgr.Flush(logMgr.latestLSN)
+
+		recGeted, err := logMgr.ReadRecordAt(logMgr.lastSavedLSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(latestRec, recGeted) {
+			t.Errorf("expected rec %v, got %v", latestRec, recGeted)
+		}
+	})
+
 	// Master LSN tests
 	t.Run("ReadMasterLSN at first", func(t *testing.T) {
 		t.Parallel()
