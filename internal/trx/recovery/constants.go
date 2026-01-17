@@ -1,8 +1,10 @@
 package recovery
 
 const (
-	checkpoint = iota
+	checkpointBegin = iota
+	checkpointEnd
 	start
+	end
 	commit
 	rollback
 	setInt16

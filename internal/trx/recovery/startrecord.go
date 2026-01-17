@@ -10,15 +10,21 @@ import (
 )
 
 type StartRecord struct {
-	txnum int32
+	lsn     int32
+	prevLSN int32
+	txnum   int32
 }
 
-func NewStartRecord(p *file.Page) *StartRecord {
-	tpos := int32Size
-	txnum := p.GetInt32(int32(tpos))
+func NewStartRecord(p *file.Page, lsn int32) *StartRecord {
+	prevPos := int32Size
+	prevLSN := p.GetInt32(int32(prevPos))
+	tPos := prevPos + int32Size
+	txnum := p.GetInt32(int32(tPos))
 
 	return &StartRecord{
-		txnum: txnum,
+		lsn,
+		prevLSN,
+		txnum,
 	}
 }
 
@@ -36,12 +42,18 @@ func (r *StartRecord) String() string {
 
 func (r *StartRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
 
+func (r *StartRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
+
+// Layout:
+// [op:int32][prevLSN:int32][txnum:int32]
 func WriteStartToLog(lm *log.LogMgr, txnum int32) (int32, error) {
-	tpos := int32Size
-	rec := make([]byte, tpos+int32Size)
+	prevPos := int32Size
+	tPos := prevPos + int32Size
+	rec := make([]byte, tPos+int32Size)
 	p := file.NewLogPage(rec)
 	p.SetInt32(0, start)
-	p.SetInt32(int32(tpos), txnum)
+	p.SetInt32(int32(prevPos), -1)
+	p.SetInt32(int32(tPos), txnum)
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write start record to log: %w", err)

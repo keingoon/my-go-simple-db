@@ -13,30 +13,40 @@ import (
 // SetDateRecord represents a SETDATE log record
 // Date is stored as int64 (e.g., unix seconds)
 type SetDateRecord struct {
-	txnum  int32
-	offset int32
-	val    time.Time
-	blk    *file.BlockId
+	lsn     int32
+	prevLSN int32
+	txnum   int32
+	offset  int32
+	oldVal  time.Time
+	newVal  time.Time
+	blk     *file.BlockId
 }
 
-func NewSetDateRecord(p *file.Page) *SetDateRecord {
-	tpos := int32Size
-	txnum := p.GetInt32(int32(tpos))
-	fpos := tpos + int32Size
-	filename := p.GetStr(int32(fpos))
-	bpos := fpos + file.MaxLength(len(filename))
-	blknum := p.GetInt32(int32(bpos))
+func NewSetDateRecord(p *file.Page, lsn int32) *SetDateRecord {
+	prevPos := int32Size
+	prevLSN := p.GetInt32(int32(prevPos))
+	tPos := prevPos + int32Size
+	txnum := p.GetInt32(int32(tPos))
+	fPos := tPos + int32Size
+	filename := p.GetStr(int32(fPos))
+	bPos := fPos + file.MaxLength(len(filename))
+	blknum := p.GetInt32(int32(bPos))
 	blk := file.NewBlockId(filename, blknum)
-	opos := bpos + int32Size
-	offset := p.GetInt32(int32(opos))
-	vpos := opos + int32Size
-	val := p.GetDate(int32(vpos))
+	oPos := bPos + int32Size
+	offset := p.GetInt32(int32(oPos))
+	oldPos := oPos + int32Size
+	oldVal := p.GetDate(int32(oldPos))
+	newPos := oldPos + dateSize
+	newVal := p.GetDate(int32(newPos))
 
 	return &SetDateRecord{
-		txnum:  txnum,
-		offset: offset,
-		val:    val,
-		blk:    blk,
+		lsn,
+		prevLSN,
+		txnum,
+		offset,
+		oldVal,
+		newVal,
+		blk,
 	}
 }
 
@@ -45,29 +55,41 @@ func (r *SetDateRecord) Op() int32 { return setDate }
 func (r *SetDateRecord) TxNumber() int32 { return r.txnum }
 
 func (r *SetDateRecord) String() string {
-	return fmt.Sprintf("<SETDATE %d %s %d %s>", r.txnum, r.blk.ToString(), r.offset, r.val)
+	return fmt.Sprintf("<SETDATE %d %s %d %s %s>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
 func (r *SetDateRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetDate(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.SetDate(ctx, r.blk, r.offset, r.oldVal, false, nil) // don't log the undo!
 	txAccess.Unpin(ctx, r.blk)
 }
 
-func WriteSetDateToLog(lm *log.LogMgr, txnum int32, blk *file.BlockId, offset int32, val time.Time) (int32, error) {
-	tpos := int32Size
-	fpos := tpos + int32Size
-	bpos := fpos + file.MaxLength(len(blk.FileName()))
-	opos := bpos + int32Size
-	vpos := opos + int32Size
-	rec := make([]byte, vpos+dateSize)
+func (r *SetDateRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
+	txAccess.Pin(ctx, r.blk)
+	txAccess.SetDate(ctx, r.blk, r.offset, r.newVal, false, nil) // don't log the undo!
+	txAccess.Unpin(ctx, r.blk)
+}
+
+// Layout:
+// [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:time.Time][newVal:time.Time]
+func WriteSetDateToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal time.Time, newVal time.Time) (int32, error) {
+	prevPos := int32Size
+	tPos := prevPos + int32Size
+	fPos := tPos + int32Size
+	bPos := fPos + file.MaxLength(len(blk.FileName()))
+	oPos := bPos + int32Size
+	oldPos := oPos + int32Size
+	newPos := oldPos + dateSize
+	rec := make([]byte, newPos+dateSize)
 	p := file.NewLogPage(rec)
 	p.SetInt32(0, setDate)
-	p.SetInt32(int32(tpos), txnum)
-	p.SetStr(int32(fpos), blk.FileName())
-	p.SetInt32(int32(bpos), blk.Number())
-	p.SetInt32(int32(opos), offset)
-	p.SetDate(int32(vpos), val)
+	p.SetInt32(int32(prevPos), prevLSN)
+	p.SetInt32(int32(tPos), txnum)
+	p.SetStr(int32(fPos), blk.FileName())
+	p.SetInt32(int32(bPos), blk.Number())
+	p.SetInt32(int32(oPos), offset)
+	p.SetDate(int32(oldPos), oldVal)
+	p.SetDate(int32(newPos), newVal)
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write date record to log: %w", err)

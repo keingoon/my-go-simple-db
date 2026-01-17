@@ -10,30 +10,40 @@ import (
 )
 
 type SetInt16Record struct {
-	txnum  int32
-	offset int32
-	val    int16
-	blk    *file.BlockId
+	lsn     int32
+	prevLSN int32
+	txnum   int32
+	offset  int32
+	oldVal  int16
+	newVal  int16
+	blk     *file.BlockId
 }
 
-func NewSetInt16Record(p *file.Page) *SetInt16Record {
-	tpos := int32Size
-	txnum := p.GetInt32(int32(tpos))
-	fpos := tpos + int32Size
-	filename := p.GetStr(int32(fpos))
-	bpos := fpos + file.MaxLength(len(filename))
-	blknum := p.GetInt32(int32(bpos))
+func NewSetInt16Record(p *file.Page, lsn int32) *SetInt16Record {
+	prevPos := int32Size
+	prevLSN := p.GetInt32(int32(prevPos))
+	tPos := prevPos + int32Size
+	txnum := p.GetInt32(int32(tPos))
+	fPos := tPos + int32Size
+	filename := p.GetStr(int32(fPos))
+	bPos := fPos + file.MaxLength(len(filename))
+	blknum := p.GetInt32(int32(bPos))
 	blk := file.NewBlockId(filename, blknum)
-	opos := bpos + int32Size
-	offset := p.GetInt32(int32(opos))
-	vpos := opos + int32Size
-	val := p.GetInt16(int32(vpos))
+	oPos := bPos + int32Size
+	offset := p.GetInt32(int32(oPos))
+	oldPos := oPos + int32Size
+	oldVal := p.GetInt16(int32(oldPos))
+	newPos := oldPos + int16Size
+	newVal := p.GetInt16(int32(newPos))
 
 	return &SetInt16Record{
-		txnum:  txnum,
-		offset: offset,
-		val:    val,
-		blk:    blk,
+		lsn,
+		prevLSN,
+		txnum,
+		offset,
+		oldVal,
+		newVal,
+		blk,
 	}
 }
 
@@ -46,29 +56,41 @@ func (r *SetInt16Record) TxNumber() int32 {
 }
 
 func (r *SetInt16Record) String() string {
-	return fmt.Sprintf("<SETINT16 %d %s %d %d>", r.txnum, r.blk.ToString(), r.offset, r.val)
+	return fmt.Sprintf("<SETINT16 %d %s %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
 func (r *SetInt16Record) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetInt16(ctx, r.blk, r.offset, r.val, false, nil) // don't log the undo!
+	txAccess.SetInt16(ctx, r.blk, r.offset, r.oldVal, false, nil) // don't log the undo!
 	txAccess.Unpin(ctx, r.blk)
 }
 
-func WriteSetInt16ToLog(lm *log.LogMgr, txnum int32, blk *file.BlockId, offset int32, val int16) (int32, error) {
-	tpos := int32Size
-	fpos := tpos + int32Size
-	bpos := fpos + file.MaxLength(len(blk.FileName()))
-	opos := bpos + int32Size
-	vpos := opos + int32Size
-	rec := make([]byte, vpos+int16Size)
+func (r *SetInt16Record) Redo(ctx context.Context, txAccess *access.Transaction) {
+	txAccess.Pin(ctx, r.blk)
+	txAccess.SetInt16(ctx, r.blk, r.offset, r.newVal, false, nil) // don't log the undo!
+	txAccess.Unpin(ctx, r.blk)
+}
+
+// Layout:
+// [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:int16][newVal:int16]
+func WriteSetInt16ToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal int16, newVal int16) (int32, error) {
+	prevPos := int32Size
+	tPos := prevPos + int32Size
+	fPos := tPos + int32Size
+	bPos := fPos + file.MaxLength(len(blk.FileName()))
+	oPos := bPos + int32Size
+	oldPos := oPos + int32Size
+	newPos := oldPos + int16Size
+	rec := make([]byte, newPos+int16Size)
 	p := file.NewLogPage(rec)
 	p.SetInt32(0, setInt16)
-	p.SetInt32(int32(tpos), txnum)
-	p.SetStr(int32(fpos), blk.FileName())
-	p.SetInt32(int32(bpos), blk.Number())
-	p.SetInt32(int32(opos), offset)
-	p.SetInt16(int32(vpos), val)
+	p.SetInt32(int32(prevPos), prevLSN)
+	p.SetInt32(int32(tPos), txnum)
+	p.SetStr(int32(fPos), blk.FileName())
+	p.SetInt32(int32(bPos), blk.Number())
+	p.SetInt32(int32(oPos), offset)
+	p.SetInt16(int32(oldPos), oldVal)
+	p.SetInt16(int32(newPos), newVal)
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write int16 record to log: %w", err)
