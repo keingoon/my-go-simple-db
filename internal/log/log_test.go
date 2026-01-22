@@ -59,7 +59,7 @@ func TestLogMgr(t *testing.T) {
 		}
 
 		// verify header block (block 0)
-		hdr := file.NewPage(blocksize)
+		hdr := file.NewLogPage(make([]byte, blocksize))
 		if err := fileMgr.Read(file.NewBlockId(logfile, 0), hdr); err != nil {
 			t.Fatal(err)
 		}
@@ -97,7 +97,7 @@ func TestLogMgr(t *testing.T) {
 		if blk0.Number() != 0 {
 			t.Fatalf("expected header block number 0, got %v", blk0.Number())
 		}
-		bad := file.NewPage(blocksize)
+		bad := file.NewLogPage(make([]byte, blocksize))
 		// leave magic as 0 (invalid), optionally fill other fields
 		if err := fileMgr.Write(blk0, bad); err != nil {
 			t.Fatal(err)
@@ -298,7 +298,7 @@ func TestLogMgr(t *testing.T) {
 			t.Errorf("expected logpage recpos %v, got %v", int32Size, recpos)
 		}
 
-		writenBlkPage := file.NewPage(blocksize)
+		writenBlkPage := file.NewLogPage(make([]byte, blocksize))
 		fileMgr.Read(blk, writenBlkPage)
 		recposInBlock := writenBlkPage.GetInt32(0)
 		if recposInBlock != int32Size {
@@ -331,7 +331,7 @@ func TestLogMgr(t *testing.T) {
 		logMgr.Flush(logMgr.latestLSN)
 
 		blk := file.NewBlockId(logfile, 1)
-		logpage := file.NewPage(blocksize)
+		logpage := file.NewLogPage(make([]byte, blocksize))
 		fileMgr.Read(blk, logpage)
 		recGeted := logpage.GetBytes(startBoundary)
 
@@ -683,12 +683,27 @@ func TestLogIterator(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var rec []byte
+		var lsnExpected int32 = startLSN
 		for i := 0; i < nextCalledCount; i++ {
-			rec = iter.Next()
+			lsn, rec := iter.Next()
 			recExpected := createLogRec(int32(i+1), logrecord)
+			recLen := len(recExpected)
+
+			if lsn != lsnExpected {
+				t.Errorf("expected Next lsn %v, got %v", lsnExpected, lsn)
+			}
+
 			if !bytes.Equal(rec, recExpected) {
 				t.Errorf("expected Next rec %v, got %v", recExpected, rec)
+			}
+
+			offsetInBlk := lsnExpected % blocksize
+			bytesNeeded := int32Size + int32(recLen)
+			if offsetInBlk+bytesNeeded >= blocksize {
+				blkNum := lsnExpected / blocksize
+				lsnExpected = (blkNum+1)*blocksize + int32Size
+			} else {
+				lsnExpected += bytesNeeded
 			}
 		}
 	})
@@ -788,7 +803,10 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal("expected at least one record")
 		}
 
-		reconstructed := iter.Next()
+		lsn, reconstructed := iter.Next()
+		if lsn != startLSN {
+			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
+		}
 		if !bytes.Equal(largeRec, reconstructed) {
 			t.Errorf("reconstructed record mismatch: expected len=%d, got len=%d", len(largeRec), len(reconstructed))
 		}
@@ -844,19 +862,33 @@ func TestFragmentRecord(t *testing.T) {
 		}
 
 		// 最初の通常レコード rec1 が最初に返る
-		got := iter.Next()
+		lsn, got := iter.Next()
+		if lsn != startLSN {
+			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
+		}
 		if !bytes.Equal(rec1, got) {
 			t.Errorf("expected latest record %v, got %v", rec1, got)
 		}
 
 		// 次の Next 呼び出しでは、壊れたフラグメントチェインをスキップして rec2 が返る
-		got = iter.Next()
+		lsn, got = iter.Next()
+		rec1BytesNeeded := int32Size + int32(len(rec1))
+		dataFirstRecBytesNeeded := int32Size + (int32Size*3 + int32(len(dataFirst)))
+		dataContRecBytesNeeded := int32Size + (int32Size*2 + int32(len(dataCont)))
+		rec2lsn := startLSN + rec1BytesNeeded + dataFirstRecBytesNeeded + dataContRecBytesNeeded
+		if lsn != int32(rec2lsn) {
+			t.Errorf("expected Next lsn %v, got %v", rec2lsn, lsn)
+		}
 		if !bytes.Equal(rec2, got) {
 			t.Errorf("expected older record %v, got %v", rec2, got)
 		}
 
 		// それ以上の論理レコードは存在しない
-		if next := iter.Next(); next != nil {
+		lsn, next := iter.Next()
+		if lsn != -1 {
+			t.Errorf("expected Next lsn %v, got %v", -1, lsn)
+		}
+		if next != nil {
 			t.Errorf("expected no more logical records, got %v", next)
 		}
 	})
@@ -908,22 +940,39 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		gotRec1 := iter.Next()
+		lsn, gotRec1 := iter.Next()
+		if lsn != startLSN {
+			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
+		}
 		if !bytes.Equal(rec1, gotRec1) {
 			t.Errorf("rec1 mismatch")
 		}
 
-		got1 := iter.Next()
+		lsn, got1 := iter.Next()
+		rec1BytesNeeded := int32Size + int32(len(rec1))
+		largeRec1lsn := startLSN + rec1BytesNeeded
+		if lsn != largeRec1lsn {
+			t.Errorf("expected Next lsn %v, got %v", largeRec1lsn, lsn)
+		}
 		if !bytes.Equal(largeRec1, got1) {
 			t.Errorf("largeRec1 mismatch")
 		}
 
-		gotRec2 := iter.Next()
+		lsn, gotRec2 := iter.Next()
+		rec2lsn := int32(667) // block2(base=512) + offset=155” から来ている
+		if lsn != rec2lsn {
+			t.Errorf("expected Next lsn %v, got %v", rec2lsn, lsn)
+		}
 		if !bytes.Equal(rec2, gotRec2) {
 			t.Errorf("rec2 mismatch")
 		}
 
-		got2 := iter.Next()
+		lsn, got2 := iter.Next()
+		rec2BytesNeeded := int32Size + int32(len(rec2))
+		largeRec2lsn := rec2lsn + rec2BytesNeeded
+		if lsn != largeRec2lsn {
+			t.Errorf("expected Next lsn %v, got %v", largeRec2lsn, lsn)
+		}
 		if !bytes.Equal(largeRec2, got2) {
 			t.Errorf("largeRec2 mismatch")
 		}
@@ -956,13 +1005,16 @@ func TestFragmentRecord(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		reconstructed := iter.Next()
+		lsn, reconstructed := iter.Next()
+		if lsn != startLSN {
+			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
+		}
 		if !bytes.Equal(smallRec, reconstructed) {
 			t.Errorf("small record mismatch")
 		}
 
 		// フラグメントではないことを確認（先頭がfragMagicでない）
-		if len(reconstructed) >= int(fragMagicOffset) {
+		if len(reconstructed) >= int(fragPayloadOffset) {
 			p := file.NewLogPage(reconstructed)
 			if p.GetInt32(0) == fragMagic {
 				t.Errorf("small record should not be fragmented")

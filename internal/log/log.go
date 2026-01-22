@@ -74,7 +74,8 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 		if hdrBlk.Number() != 0 {
 			return nil, fmt.Errorf("unexpected header block number: %d", hdrBlk.Number())
 		}
-		hdr := file.NewPage(fm.BlockSize())
+
+		hdr := file.NewLogPage(make([]byte, fm.BlockSize()))
 		if err := hdr.SetInt32(headerMagicOffset, logHeaderMagic); err != nil {
 			return nil, fmt.Errorf("could not write header magic: %w", err)
 		}
@@ -93,7 +94,7 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 	} else {
 		// ログヘッダーブロックの値チェックバリデーション
 		hdrBlk := file.NewBlockId(logfile, 0)
-		hdr := file.NewPage(fm.BlockSize())
+		hdr := file.NewLogPage(make([]byte, fm.BlockSize()))
 		if err := fm.Read(hdrBlk, hdr); err != nil {
 			return nil, fmt.Errorf("could not read header block: %w", err)
 		}
@@ -158,7 +159,7 @@ func (logMgr *LogMgr) ReadRecordAt(lsn int32) ([]byte, error) {
 	if !iter.HasNext() {
 		return nil, fmt.Errorf("could not read record at lsn: %d", lsn)
 	}
-	rec := iter.Next()
+	_, rec := iter.Next()
 
 	return rec, nil
 }
@@ -331,6 +332,7 @@ type LogIterator struct {
 	p          *file.Page
 	currentpos int32
 	boundary   int32
+	currentLSN int32
 }
 
 func newLogIterator(fm *file.FileMgr, logfile string, startLsn, endBlkNum int32) *LogIterator {
@@ -345,7 +347,7 @@ func newLogIterator(fm *file.FileMgr, logfile string, startLsn, endBlkNum int32)
 	startBlk := file.NewBlockId(logfile, startBlkNum)
 	endBlk := file.NewBlockId(logfile, endBlkNum)
 
-	logIterator := &LogIterator{fm, startBlk, endBlk, p, 0, 0}
+	logIterator := &LogIterator{fm, startBlk, endBlk, p, 0, 0, startLsn}
 	logIterator.moveToBlock(startBlk, startOffset)
 	return logIterator
 }
@@ -364,22 +366,23 @@ func (logIter *LogIterator) HasNext() bool {
 	return true
 }
 
-func (logIter *LogIterator) Next() []byte {
+func (logIter *LogIterator) Next() (int32, []byte) {
 	for {
 		logIter.ensureCurrentBlock()
 
 		// これ以上読める論理レコードが無い場合
 		if !logIter.HasNext() {
-			return nil
+			return -1, nil
 		}
 
 		rec := logIter.readPhysicalRecord()
+		currentLSN := logIter.currentLSN
 		logIter.nextToRecordPosition(len(rec))
 
 		// フラグメントかどうか判定
 		if !logIter.isFragment(rec) {
 			// 非フラグメントのペイロード
-			return rec
+			return currentLSN, rec
 		}
 
 		flags := logIter.getFragmentFlags(rec)
@@ -391,7 +394,7 @@ func (logIter *LogIterator) Next() []byte {
 				continue
 			}
 			if reconstructed, ok := logIter.reconstructFragmentChain(rec, totalLen); ok {
-				return reconstructed
+				return currentLSN, reconstructed
 			}
 			// 復元に失敗した場合は、この論理レコードをスキップして次の論理レコード探索を続ける
 			continue
@@ -400,7 +403,7 @@ func (logIter *LogIterator) Next() []byte {
 			continue
 		default:
 			// 想定外のフラグ。非フラグメントとして扱う
-			return rec
+			return -1, rec
 		}
 	}
 }
@@ -417,6 +420,7 @@ func (logIter *LogIterator) readPhysicalRecord() []byte {
 // 次のレコードの位置を計算する
 func (logIter *LogIterator) nextToRecordPosition(recLen int) int32 {
 	logIter.currentpos += int32Size + int32(recLen)
+	logIter.currentLSN += int32Size + int32(recLen)
 	return logIter.currentpos
 }
 
@@ -465,6 +469,7 @@ func (logIter *LogIterator) moveToBlock(blk *file.BlockId, offset int32) {
 	fileMgr.Read(blk, p)
 	logIter.boundary = p.GetInt32(0)
 	logIter.currentpos = offset
+	logIter.currentLSN = blk.Number()*logIter.fm.BlockSize() + offset
 }
 
 // 現在位置がブロック境界に達している場合、次のブロックに移動する
@@ -510,7 +515,7 @@ func (logMgr *LogMgr) ReadMasterLSN() (int32, error) {
 	defer logMgr.mu.RUnlock()
 
 	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
-	hdr := file.NewPage(logMgr.fm.BlockSize())
+	hdr := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
 	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
 		return 0, fmt.Errorf("could not read header block: %w", err)
 	}
@@ -525,7 +530,7 @@ func (logMgr *LogMgr) WriteMasterLSN(lsn int32) error {
 	defer logMgr.mu.Unlock()
 
 	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
-	hdr := file.NewPage(logMgr.fm.BlockSize())
+	hdr := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
 	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
 		return fmt.Errorf("could not read header block: %w", err)
 	}
