@@ -32,6 +32,8 @@ func (r *StartRecord) Op() int32 {
 	return start
 }
 
+func (r *StartRecord) PrevLSN() int32 { return r.prevLSN }
+
 func (r *StartRecord) TxNumber() int32 {
 	return r.txnum
 }

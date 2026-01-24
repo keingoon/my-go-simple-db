@@ -52,7 +52,11 @@ func NewSetDateRecord(p *file.Page, lsn int32) *SetDateRecord {
 
 func (r *SetDateRecord) Op() int32 { return setDate }
 
+func (r *SetDateRecord) PrevLSN() int32 { return r.prevLSN }
+
 func (r *SetDateRecord) TxNumber() int32 { return r.txnum }
+
+func (r *SetDateRecord) Blk() *file.BlockId { return r.blk }
 
 func (r *SetDateRecord) String() string {
 	return fmt.Sprintf("<SETDATE %d %s %d %s %s>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
@@ -60,13 +64,13 @@ func (r *SetDateRecord) String() string {
 
 func (r *SetDateRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetDate(ctx, r.blk, r.offset, r.oldVal, false, nil) // don't log the undo!
+	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
 func (r *SetDateRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetDate(ctx, r.blk, r.offset, r.newVal, false, nil) // don't log the undo!
+	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 

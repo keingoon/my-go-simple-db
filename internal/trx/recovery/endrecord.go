@@ -28,6 +28,10 @@ func (r *EndRecord) Op() int32 {
 	return end
 }
 
+func (r *EndRecord) PrevLSN() int32 {
+	return r.prevLSN
+}
+
 func (r *EndRecord) TxNumber() int32 {
 	return r.txnum
 }

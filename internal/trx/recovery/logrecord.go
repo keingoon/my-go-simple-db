@@ -9,9 +9,15 @@ import (
 
 type LogRecord interface {
 	Op() int32
+	PrevLSN() int32
 	TxNumber() int32
 	Undo(ctx context.Context, txAccess *access.Transaction)
 	Redo(ctx context.Context, txAccess *access.Transaction)
+}
+
+type UpdateLogRecord interface {
+	LogRecord
+	Blk() *file.BlockId
 }
 
 func CreateLogRecord(b []byte, lsn int32) LogRecord {

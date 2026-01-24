@@ -50,7 +50,11 @@ func NewSetBoolRecord(p *file.Page, lsn int32) *SetBoolRecord {
 
 func (r *SetBoolRecord) Op() int32 { return setBool }
 
+func (r *SetBoolRecord) PrevLSN() int32 { return r.prevLSN }
+
 func (r *SetBoolRecord) TxNumber() int32 { return r.txnum }
+
+func (r *SetBoolRecord) Blk() *file.BlockId { return r.blk }
 
 func (r *SetBoolRecord) String() string {
 	return fmt.Sprintf("<SETBOOL %d %s %d %t %t>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
@@ -58,13 +62,13 @@ func (r *SetBoolRecord) String() string {
 
 func (r *SetBoolRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetBool(ctx, r.blk, r.offset, r.oldVal, false, nil) // TODO: add CLR log fn
+	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
 func (r *SetBoolRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetBool(ctx, r.blk, r.offset, r.newVal, false, nil) // TODO: add CLR log fn
+	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal) // TODO: add CLR log fn
 	txAccess.Unpin(ctx, r.blk)
 }
 

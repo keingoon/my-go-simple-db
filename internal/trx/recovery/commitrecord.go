@@ -33,6 +33,10 @@ func (r *CommitRecord) Op() int32 {
 	return commit
 }
 
+func (r *CommitRecord) PrevLSN() int32 {
+	return r.prevLSN
+}
+
 func (r *CommitRecord) TxNumber() int32 {
 	return r.txnum
 }

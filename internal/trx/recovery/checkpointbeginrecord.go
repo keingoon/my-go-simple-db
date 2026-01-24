@@ -21,6 +21,10 @@ func (r *CheckpointBeginRecord) Op() int32 {
 	return checkpointBegin
 }
 
+func (r *CheckpointBeginRecord) PrevLSN() int32 {
+	return -1
+}
+
 func (r *CheckpointBeginRecord) TxNumber() int32 {
 	return -1
 }

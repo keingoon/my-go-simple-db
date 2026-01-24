@@ -51,9 +51,13 @@ func (r *SetInt16Record) Op() int32 {
 	return setInt16
 }
 
+func (r *SetInt16Record) PrevLSN() int32 { return r.prevLSN }
+
 func (r *SetInt16Record) TxNumber() int32 {
 	return r.txnum
 }
+
+func (r *SetInt16Record) Blk() *file.BlockId { return r.blk }
 
 func (r *SetInt16Record) String() string {
 	return fmt.Sprintf("<SETINT16 %d %s %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
@@ -61,13 +65,13 @@ func (r *SetInt16Record) String() string {
 
 func (r *SetInt16Record) Undo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetInt16(ctx, r.blk, r.offset, r.oldVal, false, nil) // don't log the undo!
+	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
 func (r *SetInt16Record) Redo(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.SetInt16(ctx, r.blk, r.offset, r.newVal, false, nil) // don't log the undo!
+	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 

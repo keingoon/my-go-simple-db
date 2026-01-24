@@ -28,6 +28,10 @@ func (r *RollbackRecord) Op() int32 {
 	return rollback
 }
 
+func (r *RollbackRecord) PrevLSN() int32 {
+	return r.prevLSN
+}
+
 func (r *RollbackRecord) TxNumber() int32 {
 	return r.txnum
 }
