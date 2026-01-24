@@ -230,6 +230,99 @@ func (tx *Transaction) SetDate(
 	return nil
 }
 
+// recovery用のAPI
+func (tx *Transaction) ApplyInt16(
+	ctx context.Context,
+	lsn int32,
+	txnum int32,
+	blk *file.BlockId,
+	offset int32,
+	val int16,
+) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	buff := tx.mybuffers.GetBuffer(blk)
+	p := buff.Contents()
+	p.SetInt16(offset, val)
+	buff.SetModified(txnum, lsn)
+	return nil
+}
+
+func (tx *Transaction) ApplyInt32(
+	ctx context.Context,
+	lsn int32,
+	txnum int32,
+	blk *file.BlockId,
+	offset int32,
+	val int32,
+) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	buff := tx.mybuffers.GetBuffer(blk)
+	p := buff.Contents()
+	p.SetInt32(offset, val)
+	buff.SetModified(tx.txnum, lsn)
+	return nil
+}
+
+func (tx *Transaction) ApplyStr(
+	ctx context.Context,
+	lsn int32,
+	txnum int32,
+	blk *file.BlockId,
+	offset int32,
+	val string,
+) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	buff := tx.mybuffers.GetBuffer(blk)
+	p := buff.Contents()
+	p.SetStr(offset, val)
+	buff.SetModified(txnum, lsn)
+	return nil
+}
+
+func (tx *Transaction) ApplyBool(
+	ctx context.Context,
+	lsn int32,
+	txnum int32,
+	blk *file.BlockId,
+	offset int32,
+	val bool,
+) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	buff := tx.mybuffers.GetBuffer(blk)
+	p := buff.Contents()
+	p.SetBool(offset, val)
+	buff.SetModified(txnum, lsn)
+	return nil
+}
+
+func (tx *Transaction) ApplyDate(
+	ctx context.Context,
+	lsn int32,
+	txnum int32,
+	blk *file.BlockId,
+	offset int32,
+	val time.Time,
+) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	buff := tx.mybuffers.GetBuffer(blk)
+	p := buff.Contents()
+	p.SetDate(offset, val)
+	buff.SetModified(txnum, lsn)
+	return nil
+}
+
+// ここまでrecovery用のAPI
+
 func (tx *Transaction) Unlock(ctx context.Context, blk *file.BlockId) {
 	tx.concurMgr.Unlock(ctx, blk)
 }
