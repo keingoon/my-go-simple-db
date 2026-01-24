@@ -25,20 +25,24 @@ type TransactionMgr struct {
 	txAccess    *access.Transaction
 }
 
-func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) *TransactionMgr {
+func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, atTbl *recovery.ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*TransactionMgr, error) {
 	mybuffers := bufferlist.NewBufferList(bm)
 	txnum := nextTxNumber()
 	txAccess := access.NewTransaction(fm, lm, bm, txnum, mybuffers)
 
-	txmgr := &TransactionMgr{
-		recoveryMgr: recovery.NewRecoveryMgr(lm, bm, txAccess, txnum),
-		bm:          bm,
-		fm:          fm,
-		txnum:       txnum,
-		mybuffers:   mybuffers,
-		txAccess:    txAccess,
+	recoveryMgr, err := recovery.NewRecoveryMgr(lm, bm, txAccess, txnum, atTbl, dptTbl)
+	if err != nil {
+		return nil, fmt.Errorf("could not create recovery manager: %w", err)
 	}
-	return txmgr
+	txmgr := &TransactionMgr{
+		recoveryMgr,
+		bm,
+		fm,
+		txnum,
+		mybuffers,
+		txAccess,
+	}
+	return txmgr, nil
 }
 
 func (txmgr *TransactionMgr) Commit(ctx context.Context) {
