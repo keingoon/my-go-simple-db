@@ -38,8 +38,8 @@ func CreateLogRecord(b []byte, lsn int32) LogRecord {
 		return NewEndRecord(p, lsn)
 	case commit:
 		return NewCommitRecord(p, lsn)
-	case rollback:
-		return NewRollbackRecord(p, lsn)
+	case abort:
+		return NewAbortRecord(p, lsn)
 	case setInt16:
 		return NewSetInt16Record(p, lsn)
 	case setInt32:

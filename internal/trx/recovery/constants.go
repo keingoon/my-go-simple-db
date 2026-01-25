@@ -6,7 +6,7 @@ const (
 	start
 	end
 	commit
-	rollback
+	abort
 	setInt16
 	setInt32
 	setStr

@@ -61,15 +61,15 @@ func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
 		return fmt.Errorf("could not get last LSN from table: %w", err)
 	}
 
-	rollbackLSN, err := WriteRollbackToLog(rMgr.lm, prevLSN, rMgr.txnum)
+	abortLSN, err := WriteAbortToLog(rMgr.lm, prevLSN, rMgr.txnum)
 	if err != nil {
-		return fmt.Errorf("could not rollback: %w", err)
+		return fmt.Errorf("could not abort: %w", err)
 	}
-	rMgr.lm.Flush(rollbackLSN)
+	rMgr.lm.Flush(abortLSN)
 	rMgr.doRollback(ctx, prevLSN)
 
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, undo, rollbackLSN)
-	if _, err := WriteEndToLog(rMgr.lm, rollbackLSN, rMgr.txnum); err != nil {
+	rMgr.atTbl.addActiveTrx(rMgr.txnum, aborting, abortLSN)
+	if _, err := WriteEndToLog(rMgr.lm, abortLSN, rMgr.txnum); err != nil {
 		return fmt.Errorf("could not write end to log: %w", err)
 	}
 	rMgr.atTbl.removeActiveTrx(rMgr.txnum)
@@ -200,15 +200,15 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, undoLSN int32) error {
 
 	bytes, err := rMgr.lm.ReadRecordAt(undoLSN)
 	if err != nil {
-		fmt.Errorf("could not get log record at lsn#%d: %w", undoLSN, err)
+		return fmt.Errorf("could not get log record at lsn#%d: %w", undoLSN, err)
 	}
 
 	logRec := CreateLogRecord(bytes, undoLSN)
 	if logRec.TxNumber() != rMgr.txnum {
-		fmt.Errorf("undo log txnum is invalid at lsn#%d", undoLSN)
+		return fmt.Errorf("undo log txnum is invalid at lsn#%d", undoLSN)
 	}
 	if logRec.Op() == start {
-		fmt.Errorf("undo log sequence is invalid at lsn#%d", undoLSN)
+		return fmt.Errorf("undo log sequence is invalid at lsn#%d", undoLSN)
 	}
 
 	undoNextLSN := logRec.PrevLSN()
@@ -271,8 +271,8 @@ func (rMgr *RecoveryMgr) doAnalyzePhase(ctx context.Context, recovAtTbl *ActiveT
 			recovAtTbl.removeActiveTrx(rec.TxNumber())
 		case commit:
 			recovAtTbl.addActiveTrx(rec.TxNumber(), commited, lsn)
-		case rollback:
-			recovAtTbl.addActiveTrx(rec.TxNumber(), undo, lsn)
+		case abort:
+			recovAtTbl.addActiveTrx(rec.TxNumber(), aborting, lsn)
 		case setInt16, setInt32, setStr, setBool, setDate:
 			updateRec := rec.(UpdateLogRecord)
 			recovAtTbl.addActiveTrx(updateRec.TxNumber(), running, lsn)

@@ -8,7 +8,7 @@ import (
 const (
 	running int32 = iota
 	commited
-	undo
+	aborting
 )
 
 type ActiveTrxTableEntry struct {
