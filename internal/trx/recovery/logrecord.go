@@ -20,6 +20,11 @@ type UpdateLogRecord interface {
 	Blk() *file.BlockId
 }
 
+type CompensationLogRecord interface {
+	UpdateLogRecord
+	UndoNextLSN() int32
+}
+
 func CreateLogRecord(b []byte, lsn int32) LogRecord {
 	p := file.NewLogPage(b)
 	switch p.GetInt32(0) {
@@ -45,6 +50,16 @@ func CreateLogRecord(b []byte, lsn int32) LogRecord {
 		return NewSetBoolRecord(p, lsn)
 	case setDate:
 		return NewSetDateRecord(p, lsn)
+	case compensationSetInt16:
+		return NewCompensationSetInt16Record(p, lsn)
+	case compensationSetInt32:
+		return NewCompensationSetInt32Record(p, lsn)
+	case compensationSetStr:
+		return NewCompensationSetStrRecord(p, lsn)
+	case compensationSetBool:
+		return NewCompensationSetBoolRecord(p, lsn)
+	case compensationSetDate:
+		return NewCompensationSetDateRecord(p, lsn)
 	}
 	return nil
 }

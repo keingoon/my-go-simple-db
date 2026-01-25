@@ -13,10 +13,10 @@ type SetInt16Record struct {
 	lsn     int32
 	prevLSN int32
 	txnum   int32
+	blk     *file.BlockId
 	offset  int32
 	oldVal  int16
 	newVal  int16
-	blk     *file.BlockId
 }
 
 func NewSetInt16Record(p *file.Page, lsn int32) *SetInt16Record {
@@ -40,22 +40,18 @@ func NewSetInt16Record(p *file.Page, lsn int32) *SetInt16Record {
 		lsn,
 		prevLSN,
 		txnum,
+		blk,
 		offset,
 		oldVal,
 		newVal,
-		blk,
 	}
 }
 
-func (r *SetInt16Record) Op() int32 {
-	return setInt16
-}
+func (r *SetInt16Record) Op() int32 { return setInt16 }
 
 func (r *SetInt16Record) PrevLSN() int32 { return r.prevLSN }
 
-func (r *SetInt16Record) TxNumber() int32 {
-	return r.txnum
-}
+func (r *SetInt16Record) TxNumber() int32 { return r.txnum }
 
 func (r *SetInt16Record) Blk() *file.BlockId { return r.blk }
 

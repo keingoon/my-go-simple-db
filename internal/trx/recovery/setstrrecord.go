@@ -13,10 +13,10 @@ type SetStrRecord struct {
 	lsn     int32
 	prevLSN int32
 	txnum   int32
+	blk     *file.BlockId
 	offset  int32
 	oldVal  string
 	newVal  string
-	blk     *file.BlockId
 }
 
 func NewSetStrRecord(p *file.Page, lsn int32) *SetStrRecord {
@@ -40,22 +40,18 @@ func NewSetStrRecord(p *file.Page, lsn int32) *SetStrRecord {
 		lsn,
 		prevLSN,
 		txnum,
+		blk,
 		offset,
 		oldVal,
 		newVal,
-		blk,
 	}
 }
 
-func (r *SetStrRecord) Op() int32 {
-	return setStr
-}
+func (r *SetStrRecord) Op() int32 { return setStr }
 
 func (r *SetStrRecord) PrevLSN() int32 { return r.prevLSN }
 
-func (r *SetStrRecord) TxNumber() int32 {
-	return r.txnum
-}
+func (r *SetStrRecord) TxNumber() int32 { return r.txnum }
 
 func (r *SetStrRecord) Blk() *file.BlockId { return r.blk }
 

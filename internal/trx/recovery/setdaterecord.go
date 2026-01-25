@@ -16,10 +16,10 @@ type SetDateRecord struct {
 	lsn     int32
 	prevLSN int32
 	txnum   int32
+	blk     *file.BlockId
 	offset  int32
 	oldVal  time.Time
 	newVal  time.Time
-	blk     *file.BlockId
 }
 
 func NewSetDateRecord(p *file.Page, lsn int32) *SetDateRecord {
@@ -43,10 +43,10 @@ func NewSetDateRecord(p *file.Page, lsn int32) *SetDateRecord {
 		lsn,
 		prevLSN,
 		txnum,
+		blk,
 		offset,
 		oldVal,
 		newVal,
-		blk,
 	}
 }
 

@@ -12,6 +12,11 @@ const (
 	setStr
 	setBool
 	setDate
+	compensationSetInt16
+	compensationSetInt32
+	compensationSetStr
+	compensationSetBool
+	compensationSetDate
 )
 
 const (

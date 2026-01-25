@@ -14,10 +14,10 @@ type SetBoolRecord struct {
 	lsn     int32
 	prevLSN int32
 	txnum   int32
+	blk     *file.BlockId
 	offset  int32
 	oldVal  bool
 	newVal  bool
-	blk     *file.BlockId
 }
 
 func NewSetBoolRecord(p *file.Page, lsn int32) *SetBoolRecord {
@@ -41,10 +41,10 @@ func NewSetBoolRecord(p *file.Page, lsn int32) *SetBoolRecord {
 		lsn,
 		prevLSN,
 		txnum,
+		blk,
 		offset,
 		oldVal,
 		newVal,
-		blk,
 	}
 }
 
