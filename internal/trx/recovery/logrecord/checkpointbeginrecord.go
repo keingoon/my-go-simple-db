@@ -1,12 +1,10 @@
-package recovery
+package logrecord
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type CheckpointBeginRecord struct {
@@ -32,10 +30,6 @@ func (r *CheckpointBeginRecord) TxNumber() int32 {
 func (r *CheckpointBeginRecord) String() string {
 	return "<CHECKPOINT-BEGIN>"
 }
-
-func (r *CheckpointBeginRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CheckpointBeginRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
 
 // Layout:
 // [op:int32]

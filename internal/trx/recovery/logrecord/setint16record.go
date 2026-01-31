@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -59,16 +59,21 @@ func (r *SetInt16Record) String() string {
 	return fmt.Sprintf("<SETINT16 %d %s %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetInt16Record) Undo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetInt16Record) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
+	txAccess.ApplyInt16(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
-func (r *SetInt16Record) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetInt16Record) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
 	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+}
+
+func (r *SetInt16Record) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {
+	undoNextLSN := r.prevLSN
+	return WriteCompensationSetInt16ToLog(lm, prevLSN, r.txnum, r.blk, r.offset, r.newVal, r.oldVal, undoNextLSN)
 }
 
 // Layout:

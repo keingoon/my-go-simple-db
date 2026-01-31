@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -69,10 +69,7 @@ func (r *CompensationSetInt16Record) String() string {
 	return fmt.Sprintf("<COMPENSATION SETINT16 %d %s %d %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal, r.undoNextLSN)
 }
 
-// Compensation SetInt16 log cannot be undone
-func (r *CompensationSetInt16Record) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CompensationSetInt16Record) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *CompensationSetInt16Record) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
 	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)

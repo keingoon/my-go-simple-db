@@ -1,28 +1,13 @@
-package recovery
+package logrecord
 
 import (
-	"context"
-
 	"github.com/keingoon/simpledb/internal/file"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type LogRecord interface {
 	Op() int32
 	PrevLSN() int32
 	TxNumber() int32
-	Undo(ctx context.Context, txAccess *access.Transaction)
-	Redo(ctx context.Context, txAccess *access.Transaction)
-}
-
-type UpdateLogRecord interface {
-	LogRecord
-	Blk() *file.BlockId
-}
-
-type CompensationLogRecord interface {
-	UpdateLogRecord
-	UndoNextLSN() int32
 }
 
 func CreateLogRecord(b []byte, lsn int32) LogRecord {

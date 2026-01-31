@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -59,16 +59,21 @@ func (r *SetStrRecord) String() string {
 	return fmt.Sprintf("<SETSTR %d %s %d %s %s>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetStrRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetStrRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.ApplyStr(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
+	txAccess.ApplyStr(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
-func (r *SetStrRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetStrRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
 	txAccess.ApplyStr(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+}
+
+func (r *SetStrRecord) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {
+	undoNextLSN := r.prevLSN
+	return WriteCompensationSetStrToLog(lm, prevLSN, r.txnum, r.blk, r.offset, r.newVal, r.oldVal, undoNextLSN)
 }
 
 // Layout:

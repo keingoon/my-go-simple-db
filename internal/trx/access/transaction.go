@@ -13,21 +13,53 @@ import (
 	"github.com/keingoon/simpledb/internal/trx/concurrency"
 )
 
+type LockPolicy int
+
+const (
+	// 通常実行: strict 2PL（S/Xとも commit/abort まで保持）
+	LockStrict2PL LockPolicy = iota
+	// 通常実行: Read Committed（Sは都度解放、Xは保持）
+	LockReadCommitted
+	// restart recovery 用（S/Xとも no-op）
+	LockNoLock
+)
+
 type Transaction struct {
-	concurMgr *concurrency.ConcurrencyMgr
-	bm        *buffer.BufferMgr
-	fm        *file.FileMgr
-	txnum     int32
-	mybuffers *bufferlist.BufferList
+	concurMgr  *concurrency.ConcurrencyMgr
+	bm         *buffer.BufferMgr
+	fm         *file.FileMgr
+	txnum      int32
+	mybuffers  *bufferlist.BufferList
+	lockPolicy LockPolicy
 }
 
 func NewTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32, mybuffers *bufferlist.BufferList) *Transaction {
+	concurMgr := concurrency.NewConcurrencyMgr()
+	// デフォルトは Strict2PL
+	lockPolicy := LockStrict2PL
 	tx := &Transaction{
-		concurMgr: concurrency.NewConcurrencyMgr(),
-		bm:        bm,
-		fm:        fm,
-		txnum:     txnum,
-		mybuffers: mybuffers,
+		concurMgr,
+		bm,
+		fm,
+		txnum,
+		mybuffers,
+		lockPolicy,
+	}
+	return tx
+}
+
+func NewRecoveryTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32) *Transaction {
+	// recovery 用は no-lock
+	concurMgr := concurrency.NewConcurrencyMgr()
+	mybuffers := bufferlist.NewBufferList(bm)
+	lockPolicy := LockNoLock
+	tx := &Transaction{
+		concurMgr,
+		bm,
+		fm,
+		txnum,
+		mybuffers,
+		lockPolicy,
 	}
 	return tx
 }
@@ -41,6 +73,9 @@ func (tx *Transaction) Unpin(ctx context.Context, blk *file.BlockId) {
 }
 
 func (tx *Transaction) SLock(ctx context.Context, blk *file.BlockId) error {
+	if tx.lockPolicy == LockNoLock {
+		return nil
+	}
 	if err := tx.concurMgr.SLock(ctx, blk); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return fmt.Errorf("slock wait timeout error: %w", err)
@@ -51,6 +86,9 @@ func (tx *Transaction) SLock(ctx context.Context, blk *file.BlockId) error {
 }
 
 func (tx *Transaction) XLock(ctx context.Context, blk *file.BlockId) error {
+	if tx.lockPolicy == LockNoLock {
+		return nil
+	}
 	if err := tx.concurMgr.XLock(ctx, blk); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return fmt.Errorf("xlock wait timeout error: %w", err)
@@ -60,9 +98,19 @@ func (tx *Transaction) XLock(ctx context.Context, blk *file.BlockId) error {
 	return nil
 }
 
+func (tx *Transaction) WithXLock(ctx context.Context, blk *file.BlockId, fn func() error) error {
+	if err := tx.XLock(ctx, blk); err != nil {
+		return err
+	}
+	return fn()
+}
+
 func (tx *Transaction) GetInt16(ctx context.Context, blk *file.BlockId, offset int32) (int16, error) {
 	if err := tx.SLock(ctx, blk); err != nil {
 		return 0, err
+	}
+	if tx.lockPolicy == LockReadCommitted {
+		defer tx.Unlock(ctx, blk)
 	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetInt16(offset), nil
@@ -72,6 +120,9 @@ func (tx *Transaction) GetInt32(ctx context.Context, blk *file.BlockId, offset i
 	if err := tx.SLock(ctx, blk); err != nil {
 		return 0, err
 	}
+	if tx.lockPolicy == LockReadCommitted {
+		defer tx.Unlock(ctx, blk)
+	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetInt32(offset), nil
 }
@@ -79,6 +130,9 @@ func (tx *Transaction) GetInt32(ctx context.Context, blk *file.BlockId, offset i
 func (tx *Transaction) GetStr(ctx context.Context, blk *file.BlockId, offset int32) (string, error) {
 	if err := tx.SLock(ctx, blk); err != nil {
 		return "", err
+	}
+	if tx.lockPolicy == LockReadCommitted {
+		defer tx.Unlock(ctx, blk)
 	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetStr(offset), nil
@@ -88,6 +142,9 @@ func (tx *Transaction) GetBool(ctx context.Context, blk *file.BlockId, offset in
 	if err := tx.SLock(ctx, blk); err != nil {
 		return false, err
 	}
+	if tx.lockPolicy == LockReadCommitted {
+		defer tx.Unlock(ctx, blk)
+	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetBool(offset), nil
 }
@@ -95,6 +152,9 @@ func (tx *Transaction) GetBool(ctx context.Context, blk *file.BlockId, offset in
 func (tx *Transaction) GetDate(ctx context.Context, blk *file.BlockId, offset int32) (time.Time, error) {
 	if err := tx.SLock(ctx, blk); err != nil {
 		return time.Time{}, err
+	}
+	if tx.lockPolicy == LockReadCommitted {
+		defer tx.Unlock(ctx, blk)
 	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	return buff.Contents().GetDate(offset), nil
@@ -230,7 +290,6 @@ func (tx *Transaction) SetDate(
 	return nil
 }
 
-// recovery用のAPI
 func (tx *Transaction) ApplyInt16(
 	ctx context.Context,
 	lsn int32,
@@ -239,9 +298,6 @@ func (tx *Transaction) ApplyInt16(
 	offset int32,
 	val int16,
 ) error {
-	if err := tx.XLock(ctx, blk); err != nil {
-		return err
-	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
 	p.SetInt16(offset, val)
@@ -257,13 +313,10 @@ func (tx *Transaction) ApplyInt32(
 	offset int32,
 	val int32,
 ) error {
-	if err := tx.XLock(ctx, blk); err != nil {
-		return err
-	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
 	p.SetInt32(offset, val)
-	buff.SetModified(tx.txnum, lsn)
+	buff.SetModified(txnum, lsn)
 	return nil
 }
 
@@ -275,9 +328,6 @@ func (tx *Transaction) ApplyStr(
 	offset int32,
 	val string,
 ) error {
-	if err := tx.XLock(ctx, blk); err != nil {
-		return err
-	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
 	p.SetStr(offset, val)
@@ -293,9 +343,6 @@ func (tx *Transaction) ApplyBool(
 	offset int32,
 	val bool,
 ) error {
-	if err := tx.XLock(ctx, blk); err != nil {
-		return err
-	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
 	p.SetBool(offset, val)
@@ -311,9 +358,6 @@ func (tx *Transaction) ApplyDate(
 	offset int32,
 	val time.Time,
 ) error {
-	if err := tx.XLock(ctx, blk); err != nil {
-		return err
-	}
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
 	p.SetDate(offset, val)
@@ -321,9 +365,10 @@ func (tx *Transaction) ApplyDate(
 	return nil
 }
 
-// ここまでrecovery用のAPI
-
 func (tx *Transaction) Unlock(ctx context.Context, blk *file.BlockId) {
+	if tx.lockPolicy == LockNoLock {
+		return
+	}
 	tx.concurMgr.Unlock(ctx, blk)
 }
 

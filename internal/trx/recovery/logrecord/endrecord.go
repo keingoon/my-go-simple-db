@@ -1,12 +1,10 @@
-package recovery
+package logrecord
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type EndRecord struct {
@@ -39,10 +37,6 @@ func (r *EndRecord) TxNumber() int32 {
 func (r *EndRecord) String() string {
 	return fmt.Sprintf("<END %d>", r.txnum)
 }
-
-func (r *EndRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *EndRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
 
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32]

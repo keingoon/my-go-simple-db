@@ -29,7 +29,7 @@ func NewDirtyPageTable() *DirtyPageTable {
 	return &DirtyPageTable{table: make(map[file.BlockId]DirtyPageEntry)}
 }
 
-func (dpt *DirtyPageTable) MarkDirtyPageTable(blk *file.BlockId, recLSN int32) {
+func (dpt *DirtyPageTable) MarkDirty(blk *file.BlockId, recLSN int32) {
 	key := *blk
 	dpt.mu.Lock()
 	defer dpt.mu.Unlock()
@@ -38,14 +38,14 @@ func (dpt *DirtyPageTable) MarkDirtyPageTable(blk *file.BlockId, recLSN int32) {
 	}
 }
 
-func (dpt *DirtyPageTable) CleanPageTable(blk *file.BlockId) {
+func (dpt *DirtyPageTable) Clean(blk *file.BlockId) {
 	key := *blk
 	dpt.mu.Lock()
 	defer dpt.mu.Unlock()
 	delete(dpt.table, key)
 }
 
-func (dpt *DirtyPageTable) GetDirtyPage(blk *file.BlockId) (DirtyPageEntry, bool) {
+func (dpt *DirtyPageTable) GetPage(blk *file.BlockId) (DirtyPageEntry, bool) {
 	key := *blk
 	dpt.mu.RLock()
 	defer dpt.mu.RUnlock()
@@ -56,7 +56,7 @@ func (dpt *DirtyPageTable) GetDirtyPage(blk *file.BlockId) (DirtyPageEntry, bool
 }
 
 func (dpt *DirtyPageTable) GetRecLSN(blk *file.BlockId) (int32, bool) {
-	entry, ok := dpt.GetDirtyPage(blk)
+	entry, ok := dpt.GetPage(blk)
 	if !ok {
 		return -1, false
 	}
@@ -78,7 +78,7 @@ func (dpt *DirtyPageTable) GetMinRecLSN() (int32, bool) {
 	return minRecLSN, true
 }
 
-func (dpt *DirtyPageTable) GetSnapshotDirtyPageTable() map[file.BlockId]DirtyPageEntry {
+func (dpt *DirtyPageTable) GetSnapshotTable() map[file.BlockId]DirtyPageEntry {
 	dpt.mu.RLock()
 	defer dpt.mu.RUnlock()
 	snapshot := make(map[file.BlockId]DirtyPageEntry, len(dpt.table))

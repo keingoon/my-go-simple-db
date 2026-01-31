@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -68,10 +68,7 @@ func (r *CompensationSetDateRecord) String() string {
 	return fmt.Sprintf("<COMPENSATION SETDATE %d %s %d %s %s %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal, r.undoNextLSN)
 }
 
-// Compensation SetDate log cannot be undone
-func (r *CompensationSetDateRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CompensationSetDateRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *CompensationSetDateRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
 	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)

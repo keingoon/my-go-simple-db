@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 const (
 	checkpointBegin = iota

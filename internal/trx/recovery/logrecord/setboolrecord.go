@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -60,15 +60,20 @@ func (r *SetBoolRecord) String() string {
 	return fmt.Sprintf("<SETBOOL %d %s %d %t %t>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetBoolRecord) Undo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetBoolRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.oldVal)
+	txAccess.ApplyBool(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 
-func (r *SetBoolRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *SetBoolRecord) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {
+	undoNextLSN := r.prevLSN
+	return WriteCompensationSetBoolToLog(lm, prevLSN, r.txnum, r.blk, r.offset, r.newVal, r.oldVal, undoNextLSN)
+}
+
+func (r *SetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
-	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal) // TODO: add CLR log fn
+	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
 }
 

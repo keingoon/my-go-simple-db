@@ -1,12 +1,10 @@
-package recovery
+package logrecord
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type AbortRecord struct {
@@ -39,10 +37,6 @@ func (r *AbortRecord) TxNumber() int32 {
 func (r *AbortRecord) String() string {
 	return fmt.Sprintf("<ABORT %d>", r.txnum)
 }
-
-func (r *AbortRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *AbortRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
 
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32]

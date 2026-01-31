@@ -1,12 +1,10 @@
-package recovery
+package logrecord
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type CommitRecord struct {
@@ -44,10 +42,6 @@ func (r *CommitRecord) TxNumber() int32 {
 func (r *CommitRecord) String() string {
 	return fmt.Sprintf("<COMMIT %d>", r.txnum)
 }
-
-func (r *CommitRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CommitRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
 
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32]

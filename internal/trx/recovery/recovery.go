@@ -9,9 +9,35 @@ import (
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/access"
+	"github.com/keingoon/simpledb/internal/trx/recovery/logrecord"
 )
 
+type DirtyingLogRecord interface {
+	logrecord.LogRecord
+	Blk() *file.BlockId
+}
+
+type UndoableUpdateLogRecord interface {
+	logrecord.LogRecord
+	Blk() *file.BlockId
+	UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32)
+	WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error)
+}
+
+type UndoableCLRLogRecord interface {
+	logrecord.LogRecord
+	Blk() *file.BlockId
+	UndoNextLSN() int32
+}
+
+type RedoableLogRecord interface {
+	logrecord.LogRecord
+	Blk() *file.BlockId
+	RedoPage(ctx context.Context, txAccess *access.Transaction)
+}
+
 type RecoveryMgr struct {
+	fm       *file.FileMgr
 	lm       *log.LogMgr
 	bm       *buffer.BufferMgr
 	txAccess *access.Transaction
@@ -20,13 +46,13 @@ type RecoveryMgr struct {
 	dptTbl   *buffer.DirtyPageTable
 }
 
-func NewRecoveryMgr(lm *log.LogMgr, bm *buffer.BufferMgr, txAccess *access.Transaction, txnum int32, atTbl *ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*RecoveryMgr, error) {
-	lsn, err := WriteStartToLog(lm, txnum)
+func NewRecoveryMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txAccess *access.Transaction, txnum int32, atTbl *ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*RecoveryMgr, error) {
+	lsn, err := logrecord.WriteStartToLog(lm, txnum)
 	if err != nil {
 		return nil, fmt.Errorf("could not write start to log: %w", err)
 	}
-	atTbl.addActiveTrx(txnum, running, lsn)
-	return &RecoveryMgr{lm: lm, bm: bm, txAccess: txAccess, txnum: txnum, atTbl: atTbl, dptTbl: dptTbl}, nil
+	atTbl.setTrx(txnum, running, lsn)
+	return &RecoveryMgr{fm, lm, bm, txAccess, txnum, atTbl, dptTbl}, nil
 }
 
 func (rMgr *RecoveryMgr) Commit(ctx context.Context) error {
@@ -37,18 +63,18 @@ func (rMgr *RecoveryMgr) Commit(ctx context.Context) error {
 		return fmt.Errorf("could not get last LSN from table: %w", err)
 	}
 
-	commitLSN, err := WriteCommitToLog(rMgr.lm, prevLSN, rMgr.txnum)
+	commitLSN, err := logrecord.WriteCommitToLog(rMgr.lm, prevLSN, rMgr.txnum)
 	if err != nil {
 		return fmt.Errorf("could not commit: %w", err)
 	}
 	rMgr.lm.Flush(commitLSN)
 
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, commited, commitLSN)
+	rMgr.atTbl.setTrx(rMgr.txnum, commited, commitLSN)
 
-	if _, err := WriteEndToLog(rMgr.lm, commitLSN, rMgr.txnum); err != nil {
+	if _, err := logrecord.WriteEndToLog(rMgr.lm, commitLSN, rMgr.txnum); err != nil {
 		return fmt.Errorf("could not write end to log: %w", err)
 	}
-	rMgr.atTbl.removeActiveTrx(rMgr.txnum)
+	rMgr.atTbl.removeTrx(rMgr.txnum)
 
 	return nil
 }
@@ -61,18 +87,21 @@ func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
 		return fmt.Errorf("could not get last LSN from table: %w", err)
 	}
 
-	abortLSN, err := WriteAbortToLog(rMgr.lm, prevLSN, rMgr.txnum)
+	abortLSN, err := logrecord.WriteAbortToLog(rMgr.lm, prevLSN, rMgr.txnum)
 	if err != nil {
 		return fmt.Errorf("could not abort: %w", err)
 	}
 	rMgr.lm.Flush(abortLSN)
-	rMgr.doRollback(ctx, prevLSN)
+	clrLastLSN, err := rMgr.doRollback(ctx, rMgr.txAccess, rMgr.txnum, prevLSN, abortLSN)
+	if err != nil {
+		return fmt.Errorf("could not rollback: %w", err)
+	}
 
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, aborting, abortLSN)
-	if _, err := WriteEndToLog(rMgr.lm, abortLSN, rMgr.txnum); err != nil {
+	rMgr.atTbl.setTrx(rMgr.txnum, aborting, clrLastLSN)
+	if _, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, rMgr.txnum); err != nil {
 		return fmt.Errorf("could not write end to log: %w", err)
 	}
-	rMgr.atTbl.removeActiveTrx(rMgr.txnum)
+	rMgr.atTbl.removeTrx(rMgr.txnum)
 
 	return nil
 }
@@ -80,14 +109,14 @@ func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
 func (rMgr *RecoveryMgr) Checkpoint(ctx context.Context) error {
 	// TODO: ARIES style recoveryを検討する
 	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
-	beginLSN, err := WriteCheckpointBeginToLog(rMgr.lm)
+	beginLSN, err := logrecord.WriteCheckpointBeginToLog(rMgr.lm)
 	if err != nil {
 		return fmt.Errorf("could not begincheckpoint: %w", err)
 	}
 
-	attSnapShot := rMgr.atTbl.getSnapshotActiveTrxTable()
-	dptSnapShot := rMgr.dptTbl.GetSnapshotDirtyPageTable()
-	endLSN, err := WriteCheckpointEndToLog(rMgr.lm, beginLSN, attSnapShot, dptSnapShot)
+	attSnapShot := rMgr.atTbl.getSnapshotTrxTable()
+	dptSnapShot := rMgr.dptTbl.GetSnapshotTable()
+	endLSN, err := logrecord.WriteCheckpointEndToLog(rMgr.lm, beginLSN, attSnapShot, dptSnapShot)
 	if err != nil {
 		return fmt.Errorf("could not end checkpoint: %w", err)
 	}
@@ -103,14 +132,12 @@ func (rMgr *RecoveryMgr) Recover(ctx context.Context) error {
 	// TODO: ARIES style recoveryを検討する
 	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
 	var lsn int32
-	lsn, err := WriteCheckpointBeginToLog(rMgr.lm)
+	lsn, err := logrecord.WriteCheckpointBeginToLog(rMgr.lm)
 	if err != nil {
 		return fmt.Errorf("could not recover: %w", err)
 	}
 	rMgr.lm.Flush(lsn)
-	rMgr.doRecover(ctx)
-
-	return nil
+	return rMgr.doRecover(ctx)
 }
 
 func (rMgr *RecoveryMgr) SetInt16(buff *buffer.Buffer, offset int32, newVal int16) (int32, error) {
@@ -121,11 +148,11 @@ func (rMgr *RecoveryMgr) SetInt16(buff *buffer.Buffer, offset int32, newVal int1
 
 	oldVal := buff.Contents().GetInt16(offset)
 	blk := buff.Block()
-	lsn, err := WriteSetInt16ToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
+	lsn, err := logrecord.WriteSetInt16ToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
 	if err != nil {
 		return -1, fmt.Errorf("could not setint16: %w", err)
 	}
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, running, lsn)
+	rMgr.atTbl.setLastLSN(rMgr.txnum, lsn)
 	return lsn, nil
 }
 
@@ -137,11 +164,11 @@ func (rMgr *RecoveryMgr) SetInt32(buff *buffer.Buffer, offset int32, newVal int3
 
 	oldVal := buff.Contents().GetInt32(offset)
 	blk := buff.Block()
-	lsn, err := WriteSetInt32ToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
+	lsn, err := logrecord.WriteSetInt32ToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
 	if err != nil {
 		return -1, fmt.Errorf("could not setint32: %w", err)
 	}
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, running, lsn)
+	rMgr.atTbl.setLastLSN(rMgr.txnum, lsn)
 	return lsn, nil
 }
 
@@ -153,11 +180,11 @@ func (rMgr *RecoveryMgr) SetStr(buff *buffer.Buffer, offset int32, newVal string
 
 	oldVal := buff.Contents().GetStr(offset)
 	blk := buff.Block()
-	lsn, err := WriteSetStrToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
+	lsn, err := logrecord.WriteSetStrToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
 	if err != nil {
 		return -1, fmt.Errorf("could not setstr: %w", err)
 	}
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, running, lsn)
+	rMgr.atTbl.setLastLSN(rMgr.txnum, lsn)
 	return lsn, nil
 }
 
@@ -169,11 +196,11 @@ func (rMgr *RecoveryMgr) SetBool(buff *buffer.Buffer, offset int32, newVal bool)
 
 	oldVal := buff.Contents().GetBool(offset)
 	blk := buff.Block()
-	lsn, err := WriteSetBoolToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
+	lsn, err := logrecord.WriteSetBoolToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
 	if err != nil {
 		return -1, fmt.Errorf("could not setbool: %w", err)
 	}
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, running, lsn)
+	rMgr.atTbl.setLastLSN(rMgr.txnum, lsn)
 	return lsn, nil
 }
 
@@ -185,39 +212,67 @@ func (rMgr *RecoveryMgr) SetDate(buff *buffer.Buffer, offset int32, newVal time.
 
 	oldVal := buff.Contents().GetDate(offset)
 	blk := buff.Block()
-	lsn, err := WriteSetDateToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
+	lsn, err := logrecord.WriteSetDateToLog(rMgr.lm, prevLSN, rMgr.txnum, blk, offset, oldVal, newVal)
 	if err != nil {
 		return -1, err
 	}
-	rMgr.atTbl.addActiveTrx(rMgr.txnum, running, lsn)
+	rMgr.atTbl.setLastLSN(rMgr.txnum, lsn)
 	return lsn, nil
 }
 
-func (rMgr *RecoveryMgr) doRollback(ctx context.Context, undoLSN int32) error {
+// Rollobackの開始地点LSNを引数に取り、順次Rollbackを行う
+func (rMgr *RecoveryMgr) doRollback(ctx context.Context, txAccess *access.Transaction, txnum int32, undoLSN int32, prevLastLSN int32) (int32, error) {
 	if undoLSN == -1 {
-		return nil
+		return prevLastLSN, nil
 	}
 
 	bytes, err := rMgr.lm.ReadRecordAt(undoLSN)
 	if err != nil {
-		return fmt.Errorf("could not get log record at lsn#%d: %w", undoLSN, err)
+		return -1, fmt.Errorf("could not get log record at lsn#%d: %w", undoLSN, err)
 	}
 
-	logRec := CreateLogRecord(bytes, undoLSN)
-	if logRec.TxNumber() != rMgr.txnum {
-		return fmt.Errorf("undo log txnum is invalid at lsn#%d", undoLSN)
+	logRec := logrecord.CreateLogRecord(bytes, undoLSN)
+	if logRec == nil {
+		return -1, fmt.Errorf("could not create log record at lsn#%d", undoLSN)
 	}
-	if logRec.Op() == start {
-		return fmt.Errorf("undo log sequence is invalid at lsn#%d", undoLSN)
+	if logRec.TxNumber() != txnum {
+		return -1, fmt.Errorf("undo log txnum is invalid at lsn#%d", undoLSN)
+	}
+	if _, ok := logRec.(*logrecord.StartRecord); ok {
+		return prevLastLSN, nil
 	}
 
-	undoNextLSN := logRec.PrevLSN()
-	return rMgr.doRollback(ctx, undoNextLSN)
+	var lastLSN int32
+	var undoNextLSN int32
+	switch setRec := logRec.(type) {
+	case UndoableUpdateLogRecord:
+		// CLRログを作成
+		clrLSN, err := setRec.WriteCLR(ctx, txAccess, rMgr.lm, prevLastLSN)
+		if err != nil {
+			return -1, fmt.Errorf("could not write clr: %w", err)
+		}
+		rMgr.lm.Flush(clrLSN)
+
+		setRec.UndoPage(ctx, txAccess, clrLSN)
+
+		undoNextLSN = logRec.PrevLSN()
+		lastLSN = clrLSN
+	case UndoableCLRLogRecord:
+		undoNextLSN = setRec.UndoNextLSN()
+		lastLSN = prevLastLSN
+	default:
+		undoNextLSN = logRec.PrevLSN()
+		lastLSN = prevLastLSN
+	}
+
+	return rMgr.doRollback(ctx, txAccess, txnum, undoNextLSN, lastLSN)
 }
 
 func (rMgr *RecoveryMgr) doRecover(ctx context.Context) error {
 	recovAtTbl := newActiveTrxTable()
 	recovDptTbl := buffer.NewDirtyPageTable()
+
+	recovTxAccess := access.NewRecoveryTransaction(rMgr.fm, rMgr.lm, rMgr.bm, rMgr.txnum)
 
 	// analyze phase
 	if err := rMgr.doAnalyzePhase(ctx, recovAtTbl, recovDptTbl); err != nil {
@@ -225,12 +280,12 @@ func (rMgr *RecoveryMgr) doRecover(ctx context.Context) error {
 	}
 
 	// redo phase
-	if err := rMgr.doRedoPhase(ctx, recovAtTbl, recovDptTbl); err != nil {
+	if err := rMgr.doRedoPhase(ctx, recovTxAccess, recovAtTbl, recovDptTbl); err != nil {
 		return fmt.Errorf("could not redo phase: %w", err)
 	}
 
 	// undo phase
-	if err := rMgr.doUndoPhase(ctx, recovAtTbl); err != nil {
+	if err := rMgr.doUndoPhase(ctx, recovTxAccess, recovAtTbl); err != nil {
 		return fmt.Errorf("could not redo phase: %w", err)
 	}
 
@@ -249,43 +304,46 @@ func (rMgr *RecoveryMgr) doAnalyzePhase(ctx context.Context, recovAtTbl *ActiveT
 	}
 	for iter.HasNext() {
 		lsn, bytes := iter.Next()
-		rec := CreateLogRecord(bytes, lsn)
-		switch rec.Op() {
-		case checkpointEnd:
-			checkPtRec := rec.(*CheckpointEndRecord)
+		rec := logrecord.CreateLogRecord(bytes, lsn)
+		if rec == nil {
+			return fmt.Errorf("could not create log record at lsn#%d", lsn)
+		}
+
+		switch r := rec.(type) {
+		case *logrecord.CheckpointEndRecord:
+			checkPtRec := r
 			attSnapShot := checkPtRec.ActiveTrxTable()
 			dptSnapShot := checkPtRec.DirtyPageTable()
 			for txnum, entry := range attSnapShot {
-				if _, ok := recovAtTbl.getActiveTrx(txnum); !ok {
-					recovAtTbl.addActiveTrx(txnum, entry.getStatus(), entry.getLastLSN())
+				if _, ok := recovAtTbl.getTrx(txnum); !ok {
+					recovAtTbl.setTrx(txnum, entry.Status, entry.LastLSN)
 				}
 			}
 			for blk, entry := range dptSnapShot {
-				if _, ok := recovDptTbl.GetDirtyPage(&blk); !ok {
-					recovDptTbl.MarkDirtyPageTable(&blk, entry.GetRecLSN())
+				if _, ok := recovDptTbl.GetPage(&blk); !ok {
+					recovDptTbl.MarkDirty(&blk, entry.GetRecLSN())
 				}
 			}
-		case start:
-			recovAtTbl.addActiveTrx(rec.TxNumber(), running, lsn)
-		case end:
-			recovAtTbl.removeActiveTrx(rec.TxNumber())
-		case commit:
-			recovAtTbl.addActiveTrx(rec.TxNumber(), commited, lsn)
-		case abort:
-			recovAtTbl.addActiveTrx(rec.TxNumber(), aborting, lsn)
-		case setInt16, setInt32, setStr, setBool, setDate:
-			updateRec := rec.(UpdateLogRecord)
-			recovAtTbl.addActiveTrx(updateRec.TxNumber(), running, lsn)
-			recovDptTbl.MarkDirtyPageTable(updateRec.Blk(), lsn)
+		case *logrecord.StartRecord:
+			recovAtTbl.setTrx(r.TxNumber(), running, lsn)
+		case *logrecord.EndRecord:
+			recovAtTbl.removeTrx(r.TxNumber())
+		case *logrecord.CommitRecord:
+			recovAtTbl.setTrx(r.TxNumber(), commited, lsn)
+		case *logrecord.AbortRecord:
+			recovAtTbl.setTrx(r.TxNumber(), aborting, lsn)
+		case DirtyingLogRecord:
+			recovAtTbl.setLastLSN(r.TxNumber(), lsn)
+			recovDptTbl.MarkDirty(r.Blk(), lsn)
 		}
 	}
 	return nil
 }
 
-func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
-	minRecLSN, ok := rMgr.dptTbl.GetMinRecLSN()
+func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.Transaction, recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
+	minRecLSN, ok := recovDptTbl.GetMinRecLSN()
 	if !ok {
-		return fmt.Errorf("could not get min rec LSN: %w", minRecLSN)
+		return nil
 	}
 
 	iter, err := rMgr.lm.Iterater(minRecLSN)
@@ -296,51 +354,56 @@ func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovAtTbl *ActiveTrxT
 	// 順次開始時点からRedoする
 	for iter.HasNext() {
 		lsn, bytes := iter.Next()
-		rec := CreateLogRecord(bytes, lsn)
-
-		updateRec, ok := rec.(UpdateLogRecord)
-		if !ok {
-			continue
+		rec := logrecord.CreateLogRecord(bytes, lsn)
+		if rec == nil {
+			return fmt.Errorf("could not create log record at lsn#%d", lsn)
 		}
 
-		dptEntry, ok := recovDptTbl.GetDirtyPage(updateRec.Blk())
-		if !ok {
-			continue
-		}
+		switch setRec := rec.(type) {
+		case RedoableLogRecord:
+			// LSNがDirty Page Tableに存在しない場合はRedoしない
+			dptEntry, ok := recovDptTbl.GetPage(setRec.Blk())
+			if !ok {
+				continue
+			}
+			// LSNがDirty Page TableのLSN未満場合はRedoしない
+			if lsn < dptEntry.GetRecLSN() {
+				continue
+			}
+			// LSNがディスク上のPageのLSN以下の場合はRedoしない
+			diskPageLSN, err := rMgr.pageLSN(ctx, rMgr.txnum, setRec.Blk())
+			if err != nil {
+				return fmt.Errorf("could not get disk page LSN: %w", err)
+			}
+			if lsn <= diskPageLSN {
+				continue
+			}
 
-		if lsn < dptEntry.GetRecLSN() {
+			setRec.RedoPage(ctx, recovTxAccess)
+		default:
 			continue
 		}
-
-		diskPageLSN, err := rMgr.pageLSN(ctx, rMgr.txnum, updateRec.Blk())
-		if err != nil {
-			return fmt.Errorf("could not get disk page LSN: %w", err)
-		}
-		if lsn <= diskPageLSN {
-			continue
-		}
-		rec.Redo(ctx, rMgr.txAccess)
 	}
 
 	// ATTでCommitしているトランザクションをENDする
-	commitTrxs, ok := recovAtTbl.getActiveTrxsByStatus(commited)
+	commitTrxs, ok := recovAtTbl.getTrxsByStatus(commited)
 	if !ok {
 		return nil
 	}
 	for _, commitTrx := range commitTrxs {
 		lsn := commitTrx.getLastLSN()
 		txnum := commitTrx.getTxnum()
-		_, err := WriteEndToLog(rMgr.lm, lsn, txnum)
+		_, err := logrecord.WriteEndToLog(rMgr.lm, lsn, txnum)
 		if err != nil {
 			return fmt.Errorf("could not write end to log: %w", err)
 		}
-		recovAtTbl.removeActiveTrx(txnum)
+		recovAtTbl.removeTrx(txnum)
 	}
 
 	return nil
 }
 
-func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovAtTbl *ActiveTrxTable) error {
+func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovTxAccess *access.Transaction, recovAtTbl *ActiveTrxTable) error {
 	attEnties := recovAtTbl.getTable()
 	for _, entry := range attEnties {
 		status := entry.getStatus()
@@ -348,10 +411,29 @@ func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovAtTbl *ActiveTrxT
 			continue
 		}
 
+		txnum := entry.getTxnum()
 		lsn := entry.getLastLSN()
-		if err := rMgr.doRollback(ctx, lsn); err != nil {
+
+		prevLastLSN := lsn
+		if status == running {
+			abortLSN, err := logrecord.WriteAbortToLog(rMgr.lm, lsn, txnum)
+			if err != nil {
+				return fmt.Errorf("could not abort: %w", err)
+			}
+			rMgr.lm.Flush(abortLSN)
+			prevLastLSN = abortLSN
+		}
+
+		clrLastLSN, err := rMgr.doRollback(ctx, recovTxAccess, txnum, lsn, prevLastLSN)
+		if err != nil {
 			return fmt.Errorf("could not rollback: %w", err)
 		}
+
+		recovAtTbl.setTrx(txnum, aborting, clrLastLSN)
+		if _, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, txnum); err != nil {
+			return fmt.Errorf("could not write end to log: %w", err)
+		}
+		recovAtTbl.removeTrx(txnum)
 	}
 	return nil
 }

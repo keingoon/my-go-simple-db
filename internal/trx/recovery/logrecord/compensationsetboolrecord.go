@@ -1,4 +1,4 @@
-package recovery
+package logrecord
 
 import (
 	"context"
@@ -66,10 +66,7 @@ func (r *CompensationSetBoolRecord) String() string {
 	return fmt.Sprintf("<COMPENSATION SETBOOL %d %s %d %t %t %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal, r.undoNextLSN)
 }
 
-// Compensation SetBool log cannot be undone
-func (r *CompensationSetBoolRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CompensationSetBoolRecord) Redo(ctx context.Context, txAccess *access.Transaction) {
+func (r *CompensationSetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
 	txAccess.Pin(ctx, r.blk)
 	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)

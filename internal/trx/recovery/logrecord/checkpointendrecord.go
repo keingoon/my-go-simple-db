@@ -1,27 +1,32 @@
-package recovery
+package logrecord
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
-	"github.com/keingoon/simpledb/internal/trx/access"
 )
 
 type CheckpointEndRecord struct {
 	lsn      int32
 	beginLSN int32
-	att      map[int32]ActiveTrxTableEntry
+	att      map[int32]CheckpointTxnEntry
 	dpt      map[file.BlockId]buffer.DirtyPageEntry
+}
+
+// CheckpointTxnEntry is a serialized snapshot entry for ATT in CHECKPOINT-END.
+// This type intentionally lives in logrecord package to avoid depending on recovery's in-memory ATT types.
+type CheckpointTxnEntry struct {
+	Status  int32
+	LastLSN int32
 }
 
 func NewCheckpointEndRecord(p *file.Page, lsn int32) *CheckpointEndRecord {
 	beginPos := int32Size
 	beginLSN := p.GetInt32(int32(beginPos))
 
-	att := make(map[int32]ActiveTrxTableEntry)
+	att := make(map[int32]CheckpointTxnEntry)
 	attCntPos := beginPos + int32Size
 	attCnt := p.GetInt32(int32(attCntPos))
 	attEntryPos := attCntPos + int32Size
@@ -32,7 +37,10 @@ func NewCheckpointEndRecord(p *file.Page, lsn int32) *CheckpointEndRecord {
 		status := p.GetInt32(int32(statusPos))
 		lastLSNPos := statusPos + int32Size
 		lastLSN := p.GetInt32(int32(lastLSNPos))
-		att[txnum] = newActiveTrxEntry(txnum, status, int32(lastLSN))
+		att[txnum] = CheckpointTxnEntry{
+			Status:  status,
+			LastLSN: int32(lastLSN),
+		}
 		attEntryPos = lastLSNPos + int32Size
 	}
 
@@ -67,7 +75,7 @@ func (r *CheckpointEndRecord) TxNumber() int32 {
 	return -1
 }
 
-func (r *CheckpointEndRecord) ActiveTrxTable() map[int32]ActiveTrxTableEntry {
+func (r *CheckpointEndRecord) ActiveTrxTable() map[int32]CheckpointTxnEntry {
 	return r.att
 }
 
@@ -79,15 +87,11 @@ func (r *CheckpointEndRecord) String() string {
 	return "<CHECKPOINT-END>"
 }
 
-func (r *CheckpointEndRecord) Undo(ctx context.Context, txAccess *access.Transaction) {}
-
-func (r *CheckpointEndRecord) Redo(ctx context.Context, txAccess *access.Transaction) {}
-
 // Layout:
 // [op:int32][beginLSN:int32]
 // [attCount:int32] { [txId:int32][status:int32][lastLSN:int32] } * attCount
 // [dptCount:int32] { [fileName:str][blknum:int32][recLSN:int32] } * dptCount
-func WriteCheckpointEndToLog(lm *log.LogMgr, beginLSN int32, attSnapShot map[int32]ActiveTrxTableEntry, dptSnapShot map[file.BlockId]buffer.DirtyPageEntry) (int32, error) {
+func WriteCheckpointEndToLog(lm *log.LogMgr, beginLSN int32, attSnapShot map[int32]CheckpointTxnEntry, dptSnapShot map[file.BlockId]buffer.DirtyPageEntry) (int32, error) {
 	// Compute total record size
 	// fixed header: op + beginLSN + attCount + dptCount (note: dptCount written after ATT section)
 	total := int32(0)
@@ -132,11 +136,11 @@ func WriteCheckpointEndToLog(lm *log.LogMgr, beginLSN int32, attSnapShot map[int
 			return -1, err
 		}
 		offset += int32Size
-		if err := p.SetInt32(offset, entry.status); err != nil {
+		if err := p.SetInt32(offset, entry.Status); err != nil {
 			return -1, err
 		}
 		offset += int32Size
-		if err := p.SetInt32(offset, entry.lastLSN); err != nil {
+		if err := p.SetInt32(offset, entry.LastLSN); err != nil {
 			return -1, err
 		}
 		offset += int32Size
