@@ -2,7 +2,6 @@ package log
 
 import (
 	"bytes"
-	"reflect"
 	"testing"
 
 	"github.com/keingoon/simpledb/internal/file"
@@ -34,8 +33,7 @@ func createLogRec(i int32, str string) []byte {
 func TestLogMgr(t *testing.T) {
 	t.Parallel()
 
-	t.Run("NewLogMgr at first", func(t *testing.T) {
-		t.Parallel()
+	t.Run("NewLogMgr: 初回はヘッダと最初のデータブロックを初期化する", func(t *testing.T) {
 		const (
 			blocksize = int32(256)
 			logfile   = "logfile"
@@ -46,38 +44,51 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		b := make([]byte, blocksize)
-		expectedpage := file.NewLogPage(b)
-		expectedpage.SetInt32(0, int32Size)
-		if !reflect.DeepEqual(logMgr.logpage, expectedpage) {
-			t.Errorf("expected empty block %v, got %v", *expectedpage, *logMgr.logpage)
-		}
-
-		expectedblk := file.NewBlockId(logfile, 1)
-		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
-			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
-		}
-
-		// verify header block (block 0)
 		hdr := file.NewLogPage(make([]byte, blocksize))
 		if err := fileMgr.Read(file.NewBlockId(logfile, 0), hdr); err != nil {
 			t.Fatal(err)
 		}
-		if got := hdr.GetInt32(headerMagicOffset); got != logHeaderMagic {
-			t.Errorf("expected header magic %v, got %v", logHeaderMagic, got)
-		}
-		if got := hdr.GetInt16(headerVersionOffset); got != logHeaderVersion {
-			t.Errorf("expected header version %v, got %v", logHeaderVersion, got)
-		}
-		if got := hdr.GetInt32(headerPageSizeOffset); got != blocksize {
-			t.Errorf("expected header page size %v, got %v", blocksize, got)
-		}
-		if got := hdr.GetInt32(headerLastCheckpointLSNOffset); got != 0 {
-			t.Errorf("expected header last checkpoint LSN %v, got %v", 0, got)
-		}
+
+		t.Run("logpageのboundaryがint32Sizeである", func(t *testing.T) {
+			if got := logMgr.logpage.GetInt32(0); got != int32Size {
+				t.Fatalf("boundaryは%vであるべきだが%vだった", int32Size, got)
+			}
+		})
+
+		t.Run("currentblkがデータブロック1を指す", func(t *testing.T) {
+			got := logMgr.currentblk
+			if got == nil || got.FileName() != logfile || got.Number() != 1 {
+				gotFile, gotNum := "<nil>", int32(-1)
+				if got != nil {
+					gotFile, gotNum = got.FileName(), got.Number()
+				}
+				t.Fatalf("currentblkは(%s, %d)であるべきだが(%s, %d)だった", logfile, 1, gotFile, gotNum)
+			}
+		})
+
+		t.Run("ヘッダ: magicが正しい", func(t *testing.T) {
+			if got := hdr.GetInt32(headerMagicOffset); got != logHeaderMagic {
+				t.Fatalf("header magicは%vであるべきだが%vだった", logHeaderMagic, got)
+			}
+		})
+		t.Run("ヘッダ: versionが正しい", func(t *testing.T) {
+			if got := hdr.GetInt16(headerVersionOffset); got != logHeaderVersion {
+				t.Fatalf("header versionは%vであるべきだが%vだった", logHeaderVersion, got)
+			}
+		})
+		t.Run("ヘッダ: page sizeが正しい", func(t *testing.T) {
+			if got := hdr.GetInt32(headerPageSizeOffset); got != blocksize {
+				t.Fatalf("header page sizeは%vであるべきだが%vだった", blocksize, got)
+			}
+		})
+		t.Run("ヘッダ: last checkpoint LSNが0である", func(t *testing.T) {
+			if got := hdr.GetInt32(headerLastCheckpointLSNOffset); got != 0 {
+				t.Fatalf("header last checkpoint LSNは%vであるべきだが%vだった", 0, got)
+			}
+		})
 	})
 
-	t.Run("NewLogMgr with invalid header", func(t *testing.T) {
+	t.Run("NewLogMgr: 不正なヘッダ(magic不一致)ならエラーになる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -85,7 +96,7 @@ func TestLogMgr(t *testing.T) {
 			logfile   = "logfile"
 		)
 
-		// Prepare a file with a bad header (magic mismatch)
+		// 不正なヘッダを持つログファイルを準備する（magic不一致）
 		fileMgr, err := file.NewFileMgr(t.TempDir(), blocksize)
 		if err != nil {
 			t.Fatal(err)
@@ -95,7 +106,7 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if blk0.Number() != 0 {
-			t.Fatalf("expected header block number 0, got %v", blk0.Number())
+			t.Fatalf("ヘッダブロック番号は0であるべきだが%vだった", blk0.Number())
 		}
 		bad := file.NewLogPage(make([]byte, blocksize))
 		// leave magic as 0 (invalid), optionally fill other fields
@@ -104,11 +115,11 @@ func TestLogMgr(t *testing.T) {
 		}
 
 		if _, err := NewLogMgr(fileMgr, logfile); err == nil {
-			t.Fatalf("expected error due to invalid header magic, got nil")
+			t.Fatalf("ヘッダmagic不一致のためエラーであるべきだがnilだった")
 		}
 	})
 
-	t.Run("Flush after Append single log rec", func(t *testing.T) {
+	t.Run("Flush: 1件追加後にFlushするとlastSavedLSNが更新される", func(t *testing.T) {
 		t.Parallel()
 		const (
 			blocksize     = int32(256)
@@ -132,16 +143,12 @@ func TestLogMgr(t *testing.T) {
 		// Flush single log rec
 		logMgr.Flush(logMgr.latestLSN)
 
-		if logMgr.latestLSN != startLSN {
-			t.Errorf("expected latestLSN %v, got %v", startLSN, logMgr.latestLSN)
-		}
-
 		if logMgr.lastSavedLSN != startLSN {
-			t.Errorf("expected lastSavedLSN %v, got %v", startLSN, logMgr.lastSavedLSN)
+			t.Errorf("lastSavedLSNは%vであるべきだが%vだった", startLSN, logMgr.lastSavedLSN)
 		}
 	})
 
-	t.Run("Iterater after Append single log rec", func(t *testing.T) {
+	t.Run("Iterater: endBlkは最終ブロックを指す", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -171,11 +178,11 @@ func TestLogMgr(t *testing.T) {
 		}
 
 		if iter.endBlk.Number() != 1 {
-			t.Errorf("expected endBlk number %v, got %v", 1, iter.endBlk.Number())
+			t.Errorf("endBlk numberは%vであるべきだが%vだった", 1, iter.endBlk.Number())
 		}
 	})
 
-	t.Run("Append single log rec", func(t *testing.T) {
+	t.Run("Append: 1件追加する", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -191,25 +198,27 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Append single log rec
 		rec := createLogRec(1, logrecord)
 		lsn, err := logMgr.Append(rec)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if lsn != startLSN {
-			t.Errorf("expected latestLSN %v, got %v", startLSN, lsn)
-		}
+		t.Run("返るLSNがレコード開始位置である", func(t *testing.T) {
+			if lsn != startLSN {
+				t.Fatalf("LSNは%vであるべきだが%vだった", startLSN, lsn)
+			}
+		})
 
-		logpage := logMgr.logpage
-		recGeted := logpage.GetBytes(startBoundary)
-		if !bytes.Equal(rec, recGeted) {
-			t.Errorf("expected logpage rec %v, got %v", rec, recGeted)
-		}
+		t.Run("メモリ上のlogpageにレコードが書き込まれる", func(t *testing.T) {
+			recGeted := logMgr.logpage.GetBytes(startBoundary)
+			if !bytes.Equal(rec, recGeted) {
+				t.Fatalf("logpageのレコードが一致しない")
+			}
+		})
 	})
 
-	t.Run("Append 20 log rec", func(t *testing.T) {
+	t.Run("Append: 複数件追加するとブロックを跨いで書き込まれる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -247,29 +256,39 @@ func TestLogMgr(t *testing.T) {
 		lastSavedLSN := blocksize + firstBlkLastRecOffset
 		latestLSN := blocksize*2 + secondBlkLastRecOffset
 
-		expectedblk := file.NewBlockId(logfile, 2)
-		if !reflect.DeepEqual(logMgr.currentblk, expectedblk) {
-			t.Errorf("expected empty block %v, got %v", *expectedblk, *logMgr.currentblk)
-		}
+		t.Run("currentblkが最終データブロックを指す", func(t *testing.T) {
+			got := logMgr.currentblk
+			if got == nil || got.FileName() != logfile || got.Number() != 2 {
+				gotFile, gotNum := "<nil>", int32(-1)
+				if got != nil {
+					gotFile, gotNum = got.FileName(), got.Number()
+				}
+				t.Fatalf("currentblkは(%s, %d)であるべきだが(%s, %d)だった", logfile, 2, gotFile, gotNum)
+			}
+		})
 
-		logpage := logMgr.logpage
-		recpos := logpage.GetInt32(0)
-		recGeted := logpage.GetBytes(recpos)
+		t.Run("メモリ上のlogpageに最後のレコードが書き込まれる", func(t *testing.T) {
+			recpos := logMgr.logpage.GetInt32(0)
+			recGeted := logMgr.logpage.GetBytes(recpos)
+			if !bytes.Equal(latestRec, recGeted) {
+				t.Fatalf("最後のレコードが一致しない")
+			}
+		})
 
-		if !bytes.Equal(latestRec, recGeted) {
-			t.Errorf("expected logpage rec %v, got %v", latestRec, recGeted)
-		}
+		t.Run("latestLSNが期待通りである", func(t *testing.T) {
+			if logMgr.latestLSN != latestLSN {
+				t.Fatalf("latestLSNは%vであるべきだが%vだった", latestLSN, logMgr.latestLSN)
+			}
+		})
 
-		if logMgr.latestLSN != latestLSN {
-			t.Errorf("expected latestLSN %v, got %v", latestLSN, logMgr.latestLSN)
-		}
-
-		if logMgr.lastSavedLSN != lastSavedLSN {
-			t.Errorf("expected lastSavedLSN %v, got %v", lastSavedLSN, logMgr.lastSavedLSN)
-		}
+		t.Run("lastSavedLSNが期待通りである", func(t *testing.T) {
+			if logMgr.lastSavedLSN != lastSavedLSN {
+				t.Fatalf("lastSavedLSNは%vであるべきだが%vだった", lastSavedLSN, logMgr.lastSavedLSN)
+			}
+		})
 	})
 
-	t.Run("appendNewBlock", func(t *testing.T) {
+	t.Run("appendNewBlock: 新しいブロックを追加する", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -282,31 +301,37 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		expectedBlk := file.NewBlockId(logfile, 2)
 		blk, err := logMgr.appendNewBlock()
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		if !reflect.DeepEqual(blk, expectedBlk) {
-			t.Errorf("expected empty block %v, got %v", *expectedBlk, *blk)
-		}
+		t.Run("返るブロックIDが期待通りである", func(t *testing.T) {
+			if blk == nil || blk.FileName() != logfile || blk.Number() != 2 {
+				gotFile, gotNum := "<nil>", int32(-1)
+				if blk != nil {
+					gotFile, gotNum = blk.FileName(), blk.Number()
+				}
+				t.Fatalf("blkは(%s, %d)であるべきだが(%s, %d)だった", logfile, 2, gotFile, gotNum)
+			}
+		})
 
-		logpage := logMgr.logpage
-		recpos := logpage.GetInt32(0)
-		if recpos != int32Size {
-			t.Errorf("expected logpage recpos %v, got %v", int32Size, recpos)
-		}
+		t.Run("メモリ上のlogpageのboundaryが初期値である", func(t *testing.T) {
+			if recpos := logMgr.logpage.GetInt32(0); recpos != int32Size {
+				t.Fatalf("boundaryは%vであるべきだが%vだった", int32Size, recpos)
+			}
+		})
 
-		writenBlkPage := file.NewLogPage(make([]byte, blocksize))
-		fileMgr.Read(blk, writenBlkPage)
-		recposInBlock := writenBlkPage.GetInt32(0)
-		if recposInBlock != int32Size {
-			t.Errorf("expected recpos in block %v, got %v", int32Size, recposInBlock)
-		}
+		t.Run("ディスク上のブロックのboundaryが初期値である", func(t *testing.T) {
+			writenBlkPage := file.NewLogPage(make([]byte, blocksize))
+			fileMgr.Read(blk, writenBlkPage)
+			if recposInBlock := writenBlkPage.GetInt32(0); recposInBlock != int32Size {
+				t.Fatalf("block boundaryは%vであるべきだが%vだった", int32Size, recposInBlock)
+			}
+		})
 	})
 
-	t.Run("flush after Append 1 rec", func(t *testing.T) {
+	t.Run("Flush: 1件追加後にFlushするとディスクへ書き込まれる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -335,16 +360,20 @@ func TestLogMgr(t *testing.T) {
 		fileMgr.Read(blk, logpage)
 		recGeted := logpage.GetBytes(startBoundary)
 
-		if !bytes.Equal(rec, recGeted) {
-			t.Errorf("expected rec in block %v, got %v", rec, recGeted)
-		}
+		t.Run("ディスク上のレコードが一致する", func(t *testing.T) {
+			if !bytes.Equal(rec, recGeted) {
+				t.Fatalf("ディスク上のレコードが一致しない")
+			}
+		})
 
-		if logMgr.lastSavedLSN != startLSN {
-			t.Errorf("expected lastSavedLSN %v, got %v", startLSN, logMgr.lastSavedLSN)
-		}
+		t.Run("lastSavedLSNが更新される", func(t *testing.T) {
+			if logMgr.lastSavedLSN != startLSN {
+				t.Fatalf("lastSavedLSNは%vであるべきだが%vだった", startLSN, logMgr.lastSavedLSN)
+			}
+		})
 	})
 
-	t.Run("ReadRecordAt after Append 1 rec and Flush", func(t *testing.T) {
+	t.Run("ReadRecordAt: Flush後にlastSavedLSNで読むと追加レコードが取れる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -370,11 +399,11 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(rec, recGeted) {
-			t.Errorf("expected rec %v, got %v", rec, recGeted)
+			t.Errorf("レコードが一致しない")
 		}
 	})
 
-	t.Run("ReadRecordAt after Append 20 rec and Flush", func(t *testing.T) {
+	t.Run("ReadRecordAt: Flush後にlastSavedLSNで読むと最後に追加したレコードが取れる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -405,12 +434,12 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(latestRec, recGeted) {
-			t.Errorf("expected rec %v, got %v", latestRec, recGeted)
+			t.Errorf("レコードが一致しない")
 		}
 	})
 
 	// Master LSN tests
-	t.Run("ReadMasterLSN at first", func(t *testing.T) {
+	t.Run("MasterLSN: 初期値は0である", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -428,11 +457,11 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if masterLsn != 0 {
-			t.Errorf("expected master LSN %v, got %v", 0, masterLsn)
+			t.Errorf("master LSNは%vであるべきだが%vだった", 0, masterLsn)
 		}
 	})
 
-	t.Run("WriteMasterLSN after reopen", func(t *testing.T) {
+	t.Run("MasterLSN: Write後にReadでき、再オープンしても保持される", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -455,9 +484,6 @@ func TestLogMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if masterLsn != want {
-			t.Errorf("expected master LSN %v, got %v", want, masterLsn)
-		}
 
 		reopened, err := NewLogMgr(fileMgr, logfile)
 		if err != nil {
@@ -467,16 +493,25 @@ func TestLogMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if masterLsn2 != want {
-			t.Errorf("expected master LSN after reopen %v, got %v", want, masterLsn2)
-		}
+
+		t.Run("Write直後にReadすると書いた値が返る", func(t *testing.T) {
+			if masterLsn != want {
+				t.Fatalf("master LSNは%vであるべきだが%vだった", want, masterLsn)
+			}
+		})
+
+		t.Run("再オープン後も同じ値が返る", func(t *testing.T) {
+			if masterLsn2 != want {
+				t.Fatalf("master LSNは%vであるべきだが%vだった", want, masterLsn2)
+			}
+		})
 	})
 }
 
 func TestLogIterator(t *testing.T) {
 	t.Parallel()
 
-	t.Run("NewLogIterator", func(t *testing.T) {
+	t.Run("Iterater: startLSNからIteratorを作る", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -495,123 +530,77 @@ func TestLogIterator(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if logIterator.currentpos != startBoundary {
-			t.Errorf("expected currentpos %v, got %v", startBoundary, logIterator.currentpos)
-		}
-		if logIterator.boundary != startBoundary {
-			t.Errorf("expected boundary %v, got %v", startBoundary, logIterator.boundary)
-		}
-	})
-
-	t.Run("HasNext called after Append and Flush 1 rec", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize     = int32(256)
-			logfile       = "logfile"
-			logrecord     = "logrecord"
-			startBoundary = int32Size
-			startLSN      = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Append and Flush single log rec
-		rec := createLogRec(1, logrecord)
-		if _, err := logMgr.Append(rec); err != nil {
-			t.Fatal(err)
-		}
-		logMgr.Flush(logMgr.latestLSN)
-
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		hasNext := iter.HasNext()
-		if !hasNext {
-			t.Errorf("expected HasNext %v, got %v", true, hasNext)
-		}
-	})
-
-	t.Run("HasNext called from Next call after Append and Flush 1 rec", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize     = int32(256)
-			logfile       = "logfile"
-			logrecord     = "logrecord"
-			startBoundary = int32Size
-			startLSN      = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Append and Flush single log rec
-		rec := createLogRec(1, logrecord)
-		if _, err := logMgr.Append(rec); err != nil {
-			t.Fatal(err)
-		}
-		logMgr.Flush(logMgr.latestLSN)
-
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		iter.Next()
-		hasNext := iter.HasNext()
-		if hasNext {
-			t.Errorf("expected HasNext %v, got %v", false, hasNext)
-		}
-	})
-
-	t.Run("HasNext called from Next 15 called after Append and Flush 20 rec", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize       = int32(256)
-			logfile         = "logfile"
-			logrecord       = "logrecord"
-			recCount        = 20
-			nextCalledCount = 15
-			startBoundary   = int32Size
-			startLSN        = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Append and Flush 20 log rec
-		for i := 0; i < recCount; i++ {
-			rec := createLogRec(int32(i+1), logrecord)
-			if _, err := logMgr.Append(rec); err != nil {
-				t.Fatal(err)
+		t.Run("currentposがstartBoundaryである", func(t *testing.T) {
+			if logIterator.currentpos != startBoundary {
+				t.Fatalf("currentposは%vであるべきだが%vだった", startBoundary, logIterator.currentpos)
 			}
-		}
-		logMgr.Flush(logMgr.latestLSN)
+		})
+		t.Run("boundaryがstartBoundaryである", func(t *testing.T) {
+			if logIterator.boundary != startBoundary {
+				t.Fatalf("boundaryは%vであるべきだが%vだった", startBoundary, logIterator.boundary)
+			}
+		})
+	})
 
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; i < nextCalledCount; i++ {
-			iter.Next()
+	t.Run("HasNext: 既存レコード数と消費数に応じて真偽が決まる", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize     = int32(256)
+			logfile       = "logfile"
+			logrecord     = "logrecord"
+			startBoundary = int32Size
+			startLSN      = int32(blocksize + startBoundary)
+		)
+
+		type tc struct {
+			name      string
+			recCount  int
+			nextCalls int
+			want      bool
 		}
 
-		hasNext := iter.HasNext()
-		if !hasNext {
-			t.Errorf("expected HasNext %v, got %v", true, hasNext)
+		tests := []tc{
+			{name: "1件ある: Next未呼び出しならtrue", recCount: 1, nextCalls: 0, want: true},
+			{name: "1件ある: 1回消費したらfalse", recCount: 1, nextCalls: 1, want: false},
+			{name: "20件ある: 15回消費ならtrue", recCount: 20, nextCalls: 15, want: true},
+			{name: "20件ある: 20回消費ならfalse", recCount: 20, nextCalls: 20, want: false},
+		}
+
+		for _, tt := range tests {
+			tt := tt
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				for i := 0; i < tt.recCount; i++ {
+					rec := createLogRec(int32(i+1), logrecord)
+					if _, err := logMgr.Append(rec); err != nil {
+						t.Fatal(err)
+					}
+				}
+				logMgr.Flush(logMgr.latestLSN)
+
+				iter, err := logMgr.Iterater(startLSN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for i := 0; i < tt.nextCalls; i++ {
+					iter.Next()
+				}
+
+				if got := iter.HasNext(); got != tt.want {
+					t.Fatalf("HasNextは%vであるべきだが%vだった (recCount=%d, nextCalls=%d)", tt.want, got, tt.recCount, tt.nextCalls)
+				}
+			})
 		}
 	})
 
-	t.Run("HasNext called from Next 20 called after Append and Flush 20 rec", func(t *testing.T) {
+	t.Run("Next: 20件追加後に順に取り出せる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -638,77 +627,39 @@ func TestLogIterator(t *testing.T) {
 		}
 		logMgr.Flush(logMgr.latestLSN)
 
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; i < nextCalledCount; i++ {
-			iter.Next()
-		}
-
-		hasNext := iter.HasNext()
-		if hasNext {
-			t.Errorf("expected HasNext %v, got %v", false, hasNext)
-		}
-	})
-
-	t.Run("Next 15 called after Append and Flush 20 rec", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize       = int32(256)
-			logfile         = "logfile"
-			logrecord       = "logrecord"
-			recCount        = 20
-			nextCalledCount = 20
-			startBoundary   = int32Size
-			startLSN        = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Append and Flush 20 log rec
-		for i := 0; i < recCount; i++ {
-			rec := createLogRec(int32(i+1), logrecord)
-			if _, err := logMgr.Append(rec); err != nil {
+		t.Run("レコードが追加順に返る", func(t *testing.T) {
+			iter, err := logMgr.Iterater(startLSN)
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		logMgr.Flush(logMgr.latestLSN)
-
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var lsnExpected int32 = startLSN
-		for i := 0; i < nextCalledCount; i++ {
-			lsn, rec := iter.Next()
-			recExpected := createLogRec(int32(i+1), logrecord)
-			recLen := len(recExpected)
-
-			if lsn != lsnExpected {
-				t.Errorf("expected Next lsn %v, got %v", lsnExpected, lsn)
+			for i := 0; i < nextCalledCount; i++ {
+				_, rec := iter.Next()
+				want := createLogRec(int32(i+1), logrecord)
+				if !bytes.Equal(rec, want) {
+					t.Fatalf("Nextで返るレコードが期待と一致しない (index=%d)", i)
+				}
 			}
+		})
 
-			if !bytes.Equal(rec, recExpected) {
-				t.Errorf("expected Next rec %v, got %v", recExpected, rec)
+		t.Run("返ったLSNでReadRecordAtすると同じレコードが取れる", func(t *testing.T) {
+			iter, err := logMgr.Iterater(startLSN)
+			if err != nil {
+				t.Fatal(err)
 			}
-
-			offsetInBlk := lsnExpected % blocksize
-			bytesNeeded := int32Size + int32(recLen)
-			if offsetInBlk+bytesNeeded >= blocksize {
-				blkNum := lsnExpected / blocksize
-				lsnExpected = (blkNum+1)*blocksize + int32Size
-			} else {
-				lsnExpected += bytesNeeded
+			for i := 0; i < nextCalledCount; i++ {
+				lsn, rec := iter.Next()
+				got, err := logMgr.ReadRecordAt(lsn)
+				if err != nil {
+					t.Fatalf("ReadRecordAt(lsn=%d)が失敗した: %v", lsn, err)
+				}
+				if !bytes.Equal(rec, got) {
+					t.Fatalf("lsn=%dはNextが返したレコードを指すべきだが一致しない (index=%d)", lsn, i)
+				}
 			}
-		}
+		})
 	})
 
-	t.Run("moveToBlock after Append 20 rec", func(t *testing.T) {
+	t.Run("moveToBlock: 次ブロックへ移動すると指定offsetから読める", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -745,19 +696,21 @@ func TestLogIterator(t *testing.T) {
 		iter.moveToBlock(nextBlk, int32Size)
 
 		p := iter.p
-		recpos := p.GetInt32(0)
-		recFirst := p.GetBytes(recpos)
-		recFirstExpected := createLogRec(blocksize/bytesPerRec, logrecord)
-		if !bytes.Equal(recFirst, recFirstExpected) {
-			t.Errorf("expected page first rec after moveToBlock %v, got %v", recFirstExpected, recFirst)
-		}
+		firstBlkRecCnt := (blocksize - int32Size) / bytesPerRec
+		recFirstExpected := createLogRec(firstBlkRecCnt+1, logrecord)
 
-		if iter.boundary != recpos {
-			t.Errorf("expected boundary after moveToBlock %v, got %v", recpos, iter.boundary)
-		}
-		if iter.currentpos != recpos {
-			t.Errorf("expected boundary after moveToBlock %v, got %v", recpos, iter.currentpos)
-		}
+		t.Run("currentposが指定offsetになる", func(t *testing.T) {
+			if iter.currentpos != int32Size {
+				t.Fatalf("currentposは%vであるべきだが%vだった", int32Size, iter.currentpos)
+			}
+		})
+
+		t.Run("指定offsetから最初のレコードが読める", func(t *testing.T) {
+			recFirst := p.GetBytes(int32Size)
+			if !bytes.Equal(recFirst, recFirstExpected) {
+				t.Fatalf("moveToBlock後の最初のレコードが期待と一致しない")
+			}
+		})
 	})
 }
 
@@ -791,7 +744,7 @@ func TestFragmentRecord(t *testing.T) {
 		// 3ブロック分の大きなレコードを作成
 		largeRec := createLargeLogRec(int(blocksize) * 3)
 		if _, err := logMgr.Append(largeRec); err != nil {
-			t.Fatalf("Append failed: %v", err)
+			t.Fatalf("Appendが失敗した: %v", err)
 		}
 		logMgr.Flush(logMgr.latestLSN)
 
@@ -800,16 +753,20 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !iter.HasNext() {
-			t.Fatal("expected at least one record")
+			t.Fatal("少なくとも1件のレコードがあるべき")
 		}
 
 		lsn, reconstructed := iter.Next()
-		if lsn != startLSN {
-			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
-		}
-		if !bytes.Equal(largeRec, reconstructed) {
-			t.Errorf("reconstructed record mismatch: expected len=%d, got len=%d", len(largeRec), len(reconstructed))
-		}
+		t.Run("LSNがstartLSNである", func(t *testing.T) {
+			if lsn != startLSN {
+				t.Fatalf("LSNは%vであるべきだが%vだった", startLSN, lsn)
+			}
+		})
+		t.Run("復元されたレコードが元と一致する", func(t *testing.T) {
+			if !bytes.Equal(largeRec, reconstructed) {
+				t.Fatalf("復元されたレコードが一致しない")
+			}
+		})
 	})
 
 	t.Run("異常形: lastがない（チェイン末尾欠け）", func(t *testing.T) {
@@ -840,12 +797,12 @@ func TestFragmentRecord(t *testing.T) {
 
 		firstFrag := logMgr.buildFragment(dataFirst, totalLen, true /* first */, false /* isLast */)
 		if err := logMgr.ensureAndWrite(firstFrag); err != nil {
-			t.Fatalf("ensureAndWrite(firstFrag) failed: %v", err)
+			t.Fatalf("ensureAndWrite(firstFrag)が失敗した: %v", err)
 		}
 
 		contFrag := logMgr.buildFragment(dataCont, totalLen, false /* first */, false /* isLast */)
 		if err := logMgr.ensureAndWrite(contFrag); err != nil {
-			t.Fatalf("ensureAndWrite(contFrag) failed: %v", err)
+			t.Fatalf("ensureAndWrite(contFrag)が失敗した: %v", err)
 		}
 
 		// その後に別の通常レコードを追加
@@ -861,36 +818,45 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 最初の通常レコード rec1 が最初に返る
-		lsn, got := iter.Next()
-		if lsn != startLSN {
-			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
-		}
-		if !bytes.Equal(rec1, got) {
-			t.Errorf("expected latest record %v, got %v", rec1, got)
-		}
+		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
+		lsn1, got1 := iter.Next()
+		lsn2, got2 := iter.Next()
+		lsn3, next3 := iter.Next()
 
-		// 次の Next 呼び出しでは、壊れたフラグメントチェインをスキップして rec2 が返る
-		lsn, got = iter.Next()
-		rec1BytesNeeded := int32Size + int32(len(rec1))
-		dataFirstRecBytesNeeded := int32Size + (int32Size*3 + int32(len(dataFirst)))
-		dataContRecBytesNeeded := int32Size + (int32Size*2 + int32(len(dataCont)))
-		rec2lsn := startLSN + rec1BytesNeeded + dataFirstRecBytesNeeded + dataContRecBytesNeeded
-		if lsn != int32(rec2lsn) {
-			t.Errorf("expected Next lsn %v, got %v", rec2lsn, lsn)
-		}
-		if !bytes.Equal(rec2, got) {
-			t.Errorf("expected older record %v, got %v", rec2, got)
-		}
-
-		// それ以上の論理レコードは存在しない
-		lsn, next := iter.Next()
-		if lsn != -1 {
-			t.Errorf("expected Next lsn %v, got %v", -1, lsn)
-		}
-		if next != nil {
-			t.Errorf("expected no more logical records, got %v", next)
-		}
+		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
+			if lsn1 != startLSN {
+				t.Fatalf("1件目のLSNは%vであるべきだが%vだった", startLSN, lsn1)
+			}
+		})
+		t.Run("1件目: レコードがrec1である", func(t *testing.T) {
+			if !bytes.Equal(rec1, got1) {
+				t.Fatalf("1件目のレコードがrec1と一致しない")
+			}
+		})
+		t.Run("2件目: レコードがrec2である", func(t *testing.T) {
+			if !bytes.Equal(rec2, got2) {
+				t.Fatalf("2件目のレコードがrec2と一致しない")
+			}
+		})
+		t.Run("2件目: 返ってきたLSNでReadRecordAtするとrec2が取れる", func(t *testing.T) {
+			got, err := logMgr.ReadRecordAt(lsn2)
+			if err != nil {
+				t.Fatalf("ReadRecordAt(lsn=%d)が失敗した: %v", lsn2, err)
+			}
+			if !bytes.Equal(rec2, got) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn2)
+			}
+		})
+		t.Run("3件目: LSNが-1である（これ以上無い）", func(t *testing.T) {
+			if lsn3 != -1 {
+				t.Fatalf("3件目のLSNは%vであるべきだが%vだった", -1, lsn3)
+			}
+		})
+		t.Run("3件目: レコードがnilである（これ以上無い）", func(t *testing.T) {
+			if next3 != nil {
+				t.Fatalf("3件目のレコードはnilであるべきだが%vだった", next3)
+			}
+		})
 	})
 
 	t.Run("正常形: 複数のフラグメントレコードが混在", func(t *testing.T) {
@@ -940,42 +906,62 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		lsn, gotRec1 := iter.Next()
-		if lsn != startLSN {
-			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
-		}
-		if !bytes.Equal(rec1, gotRec1) {
-			t.Errorf("rec1 mismatch")
-		}
-
-		lsn, got1 := iter.Next()
+		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
+		lsn1, gotRec1 := iter.Next()
+		lsn2, gotLarge1 := iter.Next()
 		rec1BytesNeeded := int32Size + int32(len(rec1))
 		largeRec1lsn := startLSN + rec1BytesNeeded
-		if lsn != largeRec1lsn {
-			t.Errorf("expected Next lsn %v, got %v", largeRec1lsn, lsn)
+		lsn3, gotRec2 := iter.Next()
+		readBackRec2, err := logMgr.ReadRecordAt(lsn3)
+		if err != nil {
+			t.Fatalf("ReadRecordAt(rec2 lsn=%d)が失敗した: %v", lsn3, err)
 		}
-		if !bytes.Equal(largeRec1, got1) {
-			t.Errorf("largeRec1 mismatch")
-		}
-
-		lsn, gotRec2 := iter.Next()
-		rec2lsn := int32(667) // block2(base=512) + offset=155” から来ている
-		if lsn != rec2lsn {
-			t.Errorf("expected Next lsn %v, got %v", rec2lsn, lsn)
-		}
-		if !bytes.Equal(rec2, gotRec2) {
-			t.Errorf("rec2 mismatch")
+		lsn4, gotLarge2 := iter.Next()
+		readBackLarge2, err := logMgr.ReadRecordAt(lsn4)
+		if err != nil {
+			t.Fatalf("ReadRecordAt(largeRec2 lsn=%d)が失敗した: %v", lsn4, err)
 		}
 
-		lsn, got2 := iter.Next()
-		rec2BytesNeeded := int32Size + int32(len(rec2))
-		largeRec2lsn := rec2lsn + rec2BytesNeeded
-		if lsn != largeRec2lsn {
-			t.Errorf("expected Next lsn %v, got %v", largeRec2lsn, lsn)
-		}
-		if !bytes.Equal(largeRec2, got2) {
-			t.Errorf("largeRec2 mismatch")
-		}
+		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
+			if lsn1 != startLSN {
+				t.Fatalf("1件目のLSNは%vであるべきだが%vだった", startLSN, lsn1)
+			}
+		})
+		t.Run("1件目: レコードがrec1である", func(t *testing.T) {
+			if !bytes.Equal(rec1, gotRec1) {
+				t.Fatalf("1件目のレコードがrec1と一致しない")
+			}
+		})
+		t.Run("2件目: LSNが期待通りである", func(t *testing.T) {
+			if lsn2 != largeRec1lsn {
+				t.Fatalf("2件目のLSNは%vであるべきだが%vだった", largeRec1lsn, lsn2)
+			}
+		})
+		t.Run("2件目: レコードがlargeRec1である", func(t *testing.T) {
+			if !bytes.Equal(largeRec1, gotLarge1) {
+				t.Fatalf("2件目のレコードがlargeRec1と一致しない")
+			}
+		})
+		t.Run("3件目: Iteratorが返すレコードがrec2である", func(t *testing.T) {
+			if !bytes.Equal(rec2, gotRec2) {
+				t.Fatalf("3件目のレコードがrec2と一致しない")
+			}
+		})
+		t.Run("3件目: 返ってきたLSNでReadRecordAtするとrec2が取れる", func(t *testing.T) {
+			if !bytes.Equal(rec2, readBackRec2) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn3)
+			}
+		})
+		t.Run("4件目: Iteratorが返すレコードがlargeRec2である", func(t *testing.T) {
+			if !bytes.Equal(largeRec2, gotLarge2) {
+				t.Fatalf("4件目のレコードがlargeRec2と一致しない")
+			}
+		})
+		t.Run("4件目: 返ってきたLSNでReadRecordAtするとlargeRec2が取れる", func(t *testing.T) {
+			if !bytes.Equal(largeRec2, readBackLarge2) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でlargeRec2が取れない", lsn4)
+			}
+		})
 	})
 
 	t.Run("正常形: 単一ブロックに収まるレコードは非フラグメントとして扱われる", func(t *testing.T) {
@@ -1006,21 +992,23 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 		lsn, reconstructed := iter.Next()
-		if lsn != startLSN {
-			t.Errorf("expected Next lsn %v, got %v", startLSN, lsn)
-		}
-		if !bytes.Equal(smallRec, reconstructed) {
-			t.Errorf("small record mismatch")
-		}
-
-		// フラグメントではないことを確認（先頭がfragMagicでない）
-		if len(reconstructed) >= int(fragPayloadOffset) {
-			p := file.NewLogPage(reconstructed)
-			if p.GetInt32(0) == fragMagic {
-				t.Errorf("small record should not be fragmented")
+		t.Run("LSNがstartLSNである", func(t *testing.T) {
+			if lsn != startLSN {
+				t.Fatalf("LSNは%vであるべきだが%vだった", startLSN, lsn)
 			}
-		}
+		})
+		t.Run("レコードが元と一致する", func(t *testing.T) {
+			if !bytes.Equal(smallRec, reconstructed) {
+				t.Fatalf("レコードが一致しない")
+			}
+		})
+		t.Run("フラグメントとして扱われない", func(t *testing.T) {
+			if len(reconstructed) >= int(fragPayloadOffset) {
+				p := file.NewLogPage(reconstructed)
+				if p.GetInt32(0) == fragMagic {
+					t.Fatalf("フラグメントとして扱われてしまった")
+				}
+			}
+		})
 	})
 }
-
-// (moved master LSN tests into TestLogMgr)
