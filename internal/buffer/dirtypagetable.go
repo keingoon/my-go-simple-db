@@ -29,6 +29,12 @@ func NewDirtyPageTable() *DirtyPageTable {
 	return &DirtyPageTable{table: make(map[file.BlockId]DirtyPageEntry)}
 }
 
+func (dpt *DirtyPageTable) GetTable() map[file.BlockId]DirtyPageEntry {
+	dpt.mu.RLock()
+	defer dpt.mu.RUnlock()
+	return dpt.table
+}
+
 func (dpt *DirtyPageTable) MarkDirty(blk *file.BlockId, recLSN int32) {
 	key := *blk
 	dpt.mu.Lock()
