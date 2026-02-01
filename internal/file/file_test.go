@@ -2,7 +2,6 @@ package file
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 )
@@ -13,34 +12,42 @@ func TestPage(t *testing.T) {
 	// Page has a fixed header region; offsets in Page APIs are relative to the data region.
 	const maxDataOffset = 256 - 1 - pageHeaderSize
 
-	t.Run("get page type", func(t *testing.T) {
+	t.Run("Page: ページ種別を取得できる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		if p.GetPageType() != heap {
-			t.Errorf("expected %d, got %d", heap, p.GetPageType())
+			t.Errorf("ページ種別は%dであるべきだが%dだった", heap, p.GetPageType())
 		}
 	})
 
-	t.Run("get page lsn", func(t *testing.T) {
+	t.Run("Page: ページLSNの初期値は0である", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		if p.GetPageLSN() != 0 {
-			t.Errorf("expected %d, got %d", 0, p.GetPageLSN())
+			t.Errorf("pageLSNは%dであるべきだが%dだった", 0, p.GetPageLSN())
 		}
 	})
 
-	t.Run("set page lsn", func(t *testing.T) {
+	t.Run("Page: ページLSNを設定するとエラーにならない", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		if err := p.SetPageLSN(1000); err != nil {
-			t.Errorf("expected no error, got %v", err)
-		}
-		if p.GetPageLSN() != 1000 {
-			t.Errorf("expected %d, got %d", 1000, p.GetPageLSN())
+			t.Fatalf("エラーでないべきだが%vだった", err)
 		}
 	})
 
-	t.Run("set int32 val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetPageLSNした値をGetPageLSNで取得できる", func(t *testing.T) {
+		t.Parallel()
+		p := NewPage(256)
+		if err := p.SetPageLSN(1000); err != nil {
+			t.Fatalf("エラーでないべきだが%vだった", err)
+		}
+		if p.GetPageLSN() != 1000 {
+			t.Errorf("pageLSNは%dであるべきだが%dだった", 1000, p.GetPageLSN())
+		}
+	})
+
+	t.Run("Page: SetInt32/GetInt32（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -49,11 +56,11 @@ func TestPage(t *testing.T) {
 		)
 		p.SetInt32(offset, val)
 		if p.GetInt32(offset) != val {
-			t.Errorf("expected %d, got %d", val, p.GetInt32(offset))
+			t.Errorf("int32は%dであるべきだが%dだった", val, p.GetInt32(offset))
 		}
 	})
 
-	t.Run("set int32 val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetInt32/GetInt32（offset=8）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -62,25 +69,26 @@ func TestPage(t *testing.T) {
 		)
 		p.SetInt32(offset, val)
 		if p.GetInt32(offset) != val {
-			t.Errorf("expected %d, got %d", val, p.GetInt32(offset))
+			t.Errorf("int32は%dであるべきだが%dだった", val, p.GetInt32(offset))
 		}
 	})
 
-	t.Run("set int32 val 254 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetInt32は範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
 			val    = int32(1000)
 			offset = int32(254)
 		)
-		var expectedErr = fmt.Errorf("set int32 offset out bound from 0 to %d", maxDataOffset)
+		expectedErr := fmt.Errorf("set int32 offset out bound from 0 to %d", maxDataOffset)
 
-		if err := p.SetInt32(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetInt32(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Fatalf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("set bytes val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetBytes/GetBytes（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		val := []byte{104, 101, 108, 108, 111, 119, 111, 114, 108, 100}
@@ -88,35 +96,36 @@ func TestPage(t *testing.T) {
 			offset = int32(0)
 		)
 		p.SetBytes(offset, val)
-		if string(p.GetBytes(offset)) != "helloworld" {
-			t.Errorf("expected %q, got %q", val, p.GetBytes(offset))
+		if got := p.GetBytes(offset); string(got) != "helloworld" {
+			t.Errorf("bytesは%qであるべきだが%qだった", val, got)
 		}
 	})
 
-	t.Run("set bytes val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetBytes/GetBytes（offset=8）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		val := []byte{104, 101, 108, 108, 111, 119, 111, 114, 108, 100}
 		const offset = int32(8)
 		p.SetBytes(offset, val)
-		if string(p.GetBytes(offset)) != "helloworld" {
-			t.Errorf("expected %q, got %q", val, p.GetBytes(offset))
+		if got := p.GetBytes(offset); string(got) != "helloworld" {
+			t.Errorf("bytesは%qであるべきだが%qだった", val, got)
 		}
 	})
 
-	t.Run("set bytes val 254 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetBytesは範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		val := []byte{104, 101, 108, 108, 111, 119, 111, 114, 108, 100}
 		const offset = int32(254)
-		var expectedErr = fmt.Errorf("set bytes offset out bound from 0 to %d", maxDataOffset)
+		expectedErr := fmt.Errorf("set bytes offset out bound from 0 to %d", maxDataOffset)
 
-		if err := p.SetBytes(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetBytes(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Fatalf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("set str val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetStr/GetStr（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -125,24 +134,24 @@ func TestPage(t *testing.T) {
 		)
 		p.SetStr(offset, val)
 		if p.GetStr(offset) != val {
-			t.Errorf("expected %s, got %s", val, p.GetBytes(offset))
+			t.Errorf("strは%qであるべきだが%qだった", val, p.GetStr(offset))
 		}
 	})
 
-	t.Run("set str val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetStr/GetStr（offset=8）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
 			val    = "takeshitanaka"
-			offset = int32(0)
+			offset = int32(8)
 		)
 		p.SetStr(offset, val)
 		if p.GetStr(offset) != val {
-			t.Errorf("expected %s, got %s", val, p.GetBytes(offset))
+			t.Errorf("strは%qであるべきだが%qだった", val, p.GetStr(offset))
 		}
 	})
 
-	t.Run("set str val 254 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetStrは範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -154,12 +163,13 @@ func TestPage(t *testing.T) {
 			expectedErr = fmt.Errorf("set str err: %w", setBytesErr)
 		)
 
-		if err := p.SetStr(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetStr(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Errorf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("set int16 val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetInt16/GetInt16（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -168,11 +178,11 @@ func TestPage(t *testing.T) {
 		)
 		p.SetInt16(offset, val)
 		if p.GetInt16(offset) != val {
-			t.Errorf("expected %d, got %d", val, p.GetInt16(offset))
+			t.Errorf("int16は%dであるべきだが%dだった", val, p.GetInt16(offset))
 		}
 	})
 
-	t.Run("set int16 val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetInt16/GetInt16（offset=8）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -181,25 +191,26 @@ func TestPage(t *testing.T) {
 		)
 		p.SetInt16(offset, val)
 		if p.GetInt16(offset) != val {
-			t.Errorf("expected %d, got %d", val, p.GetInt16(offset))
+			t.Errorf("int16は%dであるべきだが%dだった", val, p.GetInt16(offset))
 		}
 	})
 
-	t.Run("set int16 val 255 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetInt16は範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
 			val    = int16(1000)
 			offset = int32(255)
 		)
-		var expectedErr = fmt.Errorf("set int16 offset out bound from 0 to %d", maxDataOffset)
+		expectedErr := fmt.Errorf("set int16 offset out bound from 0 to %d", maxDataOffset)
 
-		if err := p.SetInt16(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetInt16(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Errorf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("set bool true val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetBool/GetBool（true）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -208,11 +219,11 @@ func TestPage(t *testing.T) {
 		)
 		p.SetBool(offset, val)
 		if p.GetBool(offset) != val {
-			t.Errorf("expected %t, got %t", val, p.GetBool(offset))
+			t.Errorf("boolは%tであるべきだが%tだった", val, p.GetBool(offset))
 		}
 	})
 
-	t.Run("set bool false val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetBool/GetBool（false）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
@@ -221,25 +232,26 @@ func TestPage(t *testing.T) {
 		)
 		p.SetBool(offset, val)
 		if p.GetBool(offset) != val {
-			t.Errorf("expected %t, got %t", val, p.GetBool(offset))
+			t.Errorf("boolは%tであるべきだが%tだった", val, p.GetBool(offset))
 		}
 	})
 
-	t.Run("set bool true val 256 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetBoolは範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		const (
 			val    = true
 			offset = int32(256)
 		)
-		var expectedErr = fmt.Errorf("set bool offset out bound from 0 to %d", maxDataOffset)
+		expectedErr := fmt.Errorf("set bool offset out bound from 0 to %d", maxDataOffset)
 
-		if err := p.SetBool(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetBool(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Errorf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("set date val 0 offset", func(t *testing.T) {
+	t.Run("Page: SetDate/GetDate（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		var (
@@ -248,11 +260,11 @@ func TestPage(t *testing.T) {
 		)
 		p.SetDate(offset, val)
 		if p.GetDate(offset) != val {
-			t.Errorf("expected %s, got %s", val, p.GetDate(offset))
+			t.Errorf("dateは%vであるべきだが%vだった", val, p.GetDate(offset))
 		}
 	})
 
-	t.Run("set date val 8 offset", func(t *testing.T) {
+	t.Run("Page: SetDate/GetDate（offset=8）", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		var (
@@ -261,31 +273,32 @@ func TestPage(t *testing.T) {
 		)
 		p.SetDate(offset, val)
 		if p.GetDate(offset) != val {
-			t.Errorf("expected %s, got %s", val, p.GetDate(offset))
+			t.Errorf("dateは%vであるべきだが%vだった", val, p.GetDate(offset))
 		}
 	})
 
-	t.Run("set date val 254 offset out of blocksize boundary 0 to 255", func(t *testing.T) {
+	t.Run("Page: SetDateは範囲外offsetだとエラーになる", func(t *testing.T) {
 		t.Parallel()
 		p := NewPage(256)
 		var (
 			val    = time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC)
 			offset = int32(254)
 		)
-		var expectedErr = fmt.Errorf("set date offset out bound from 0 to %d", maxDataOffset)
+		expectedErr := fmt.Errorf("set date offset out bound from 0 to %d", maxDataOffset)
 
-		if err := p.SetDate(offset, val); err.Error() != expectedErr.Error() {
-			t.Errorf("expected %v, got %v", expectedErr, err)
+		err := p.SetDate(offset, val)
+		if err == nil || err.Error() != expectedErr.Error() {
+			t.Errorf("エラーは%vであるべきだが%vだった", expectedErr, err)
 		}
 	})
 
-	t.Run("call new log page", func(t *testing.T) {
+	t.Run("LogPage: NewLogPageで与えたバイト列が保持される", func(t *testing.T) {
 		t.Parallel()
 		const val = "<BEGIN>log<END>"
 		b := []byte(val)
 		p := NewLogPage(b)
 		if string(p.bb) != val {
-			t.Errorf("expected %s, got %s", val, string(p.bb))
+			t.Errorf("bbは%qであるべきだが%qだった", val, string(p.bb))
 		}
 	})
 }
@@ -293,7 +306,7 @@ func TestPage(t *testing.T) {
 func TestFileMgr(t *testing.T) {
 	t.Parallel()
 
-	t.Run("read and write", func(t *testing.T) {
+	t.Run("FileMgr: Writeした値をReadで取得できる（offset=0）", func(t *testing.T) {
 		t.Parallel()
 		const (
 			blocksize = int32(256)
@@ -314,11 +327,11 @@ func TestFileMgr(t *testing.T) {
 		readP := NewPage(mgr.BlockSize())
 		mgr.Read(blk, readP)
 		if readP.GetStr(offset) != val {
-			t.Errorf("expected %s, got %s", val, readP.GetStr(offset))
+			t.Errorf("文字列は%qであるべきだが%qだった", val, readP.GetStr(offset))
 		}
 	})
 
-	t.Run("read and write with offset", func(t *testing.T) {
+	t.Run("FileMgr: Writeした値をReadで取得できる（offsetあり）", func(t *testing.T) {
 		t.Parallel()
 		const (
 			blocksize = int32(256)
@@ -339,11 +352,11 @@ func TestFileMgr(t *testing.T) {
 		readP := NewPage(mgr.BlockSize())
 		mgr.Read(blk, readP)
 		if readP.GetStr(offset) != val {
-			t.Errorf("expected %s, got %s", val, readP.GetStr(offset))
+			t.Errorf("文字列は%qであるべきだが%qだった", val, readP.GetStr(offset))
 		}
 	})
 
-	t.Run("Append", func(t *testing.T) {
+	t.Run("FileMgr: Appendするとブロック番号が1増える", func(t *testing.T) {
 		t.Parallel()
 		const (
 			blocksize = int32(256)
@@ -365,15 +378,19 @@ func TestFileMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		expectedblk := NewBlockId(filename, blk.Number()+1)
-		if !reflect.DeepEqual(newblk, expectedblk) {
-			t.Errorf("expected empty block %v, got %v", *expectedblk, *newblk)
+
+		if newblk == nil || newblk.FileName() != filename || newblk.Number() != blk.Number()+1 {
+			gotFile, gotNum := "<nil>", int32(-1)
+			if newblk != nil {
+				gotFile, gotNum = newblk.FileName(), newblk.Number()
+			}
+			t.Fatalf("newblkは(%s, %d)であるべきだが(%s, %d)だった", filename, blk.Number()+1, gotFile, gotNum)
 		}
 	})
 
-	t.Run("Length", func(t *testing.T) {
+	t.Run("FileMgr: Length(filename)はブロック数を返す", func(t *testing.T) {
 		t.Parallel()
-		t.Run("when new file", func(t *testing.T) {
+		t.Run("未作成ファイルに対しては0を返す", func(t *testing.T) {
 			t.Parallel()
 			const (
 				blocksize   = int32(256)
@@ -384,16 +401,16 @@ func TestFileMgr(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			len, err := mgr.Length(filename)
+			gotLen, err := mgr.Length(filename)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len != 0 {
-				t.Errorf("expected %d, got %d", expectedlen, len)
+			if gotLen != 0 {
+				t.Errorf("Lengthは%dであるべきだが%dだった", expectedlen, gotLen)
 			}
 		})
 
-		t.Run("after write file", func(t *testing.T) {
+		t.Run("書き込み後は1を返す", func(t *testing.T) {
 			const (
 				blocksize   = int32(256)
 				offset      = int32(0)
@@ -409,12 +426,12 @@ func TestFileMgr(t *testing.T) {
 			writeP.SetStr(offset, val)
 			blk := NewBlockId(filename, 0)
 			mgr.Write(blk, writeP)
-			len, err := mgr.Length(filename)
+			gotLen, err := mgr.Length(filename)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len != expectedlen {
-				t.Errorf("expected %d, got %d", expectedlen, len)
+			if gotLen != expectedlen {
+				t.Errorf("Lengthは%dであるべきだが%dだった", expectedlen, gotLen)
 			}
 		})
 	})
