@@ -1,4 +1,4 @@
-package buffer_test
+package buffer
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
 )
@@ -46,13 +45,13 @@ func TestBuffer(t *testing.T) {
 			logfile   = "logfile"
 		)
 
-		newBuf := func(t *testing.T) *buffer.Buffer {
+		newBuf := func(t *testing.T) *Buffer {
 			t.Helper()
 			fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
 			if err != nil {
 				t.Fatal(err)
 			}
-			return buffer.NewBuffer(fm, lm)
+			return NewBuffer(fm, lm)
 		}
 
 		t.Run("Contentsはnilでない", func(t *testing.T) {
@@ -102,7 +101,7 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := buffer.NewBuffer(fm, lm)
+		b := NewBuffer(fm, lm)
 
 		b.SetModified(txnum, -1)
 		if got := b.ModifyingTx(); got != txnum {
@@ -122,7 +121,7 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := buffer.NewBuffer(fm, lm)
+		b := NewBuffer(fm, lm)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != lsn {
@@ -142,7 +141,7 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := buffer.NewBuffer(fm, lm)
+		b := NewBuffer(fm, lm)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != 0 {
@@ -166,7 +165,7 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 		if got := mgr.Available(); got != numbuffs {
 			t.Fatalf("Availableは%vであるべきだが%vだった", numbuffs, got)
 		}
@@ -187,7 +186,7 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -252,7 +251,7 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 		mgr.Maxtime = 500 // ms
 
 		blk1, err := fm.Append(filename)
@@ -312,7 +311,7 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
 		mgr.Maxtime = 50 // ms
 
 		blk1, err := fm.Append(filename)
@@ -343,12 +342,12 @@ func TestBufferMgr(t *testing.T) {
 
 		fm  *file.FileMgr
 		lm  *log.LogMgr
-		mgr *buffer.BufferMgr
+		mgr *BufferMgr
 
 		blk1 *file.BlockId
 		blk2 *file.BlockId
-		b1   *buffer.Buffer
-		b2   *buffer.Buffer
+		b1   *Buffer
+		b2   *Buffer
 
 		logrec1 []byte
 		logrec2 []byte
@@ -379,7 +378,7 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.mgr = buffer.NewBufferMgr(f.fm, f.lm, numbuffs, numwaits)
+		f.mgr = NewBufferMgr(f.fm, f.lm, numbuffs, numwaits)
 
 		f.blk1, err = f.fm.Append(filename)
 		if err != nil {

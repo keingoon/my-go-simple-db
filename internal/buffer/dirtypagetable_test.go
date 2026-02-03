@@ -1,9 +1,8 @@
-package buffer_test
+package buffer
 
 import (
 	"testing"
 
-	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 )
 
@@ -12,7 +11,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 	t.Run("DirtyPageTable: NewDirtyPageTableの初期状態", func(t *testing.T) {
 		t.Parallel()
-		dpt := buffer.NewDirtyPageTable()
+		dpt := NewDirtyPageTable()
 
 		blk := file.NewBlockId("test", 1)
 
@@ -54,7 +53,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 	t.Run("DirtyPageTable: MarkDirty", func(t *testing.T) {
 		t.Parallel()
-		dpt := buffer.NewDirtyPageTable()
+		dpt := NewDirtyPageTable()
 		blk := file.NewBlockId("test", 1)
 		recLSN1 := int32(10)
 		recLSN2 := int32(20)
@@ -92,7 +91,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 	t.Run("DirtyPageTable: Clean", func(t *testing.T) {
 		t.Parallel()
-		dpt := buffer.NewDirtyPageTable()
+		dpt := NewDirtyPageTable()
 		blk1 := file.NewBlockId("test", 1)
 		blk2 := file.NewBlockId("test", 2)
 		dpt.MarkDirty(blk1, 10)
@@ -118,7 +117,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 		t.Run("空なら(-1,false)を返す", func(t *testing.T) {
 			t.Parallel()
-			dpt := buffer.NewDirtyPageTable()
+			dpt := NewDirtyPageTable()
 			lsn, ok := dpt.GetMinRecLSN()
 			if ok || lsn != -1 {
 				t.Fatalf("GetMinRecLSNは(-1,false)を返すべきだが(%d,%v)だった", lsn, ok)
@@ -127,7 +126,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 		t.Run("1件ならそのrecLSNを返す", func(t *testing.T) {
 			t.Parallel()
-			dpt := buffer.NewDirtyPageTable()
+			dpt := NewDirtyPageTable()
 			blk := file.NewBlockId("test", 1)
 			dpt.MarkDirty(blk, 10)
 			lsn, ok := dpt.GetMinRecLSN()
@@ -138,7 +137,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 		t.Run("複数件なら最小recLSNを返す", func(t *testing.T) {
 			t.Parallel()
-			dpt := buffer.NewDirtyPageTable()
+			dpt := NewDirtyPageTable()
 			dpt.MarkDirty(file.NewBlockId("test", 1), 20)
 			dpt.MarkDirty(file.NewBlockId("test", 2), 10)
 			dpt.MarkDirty(file.NewBlockId("test", 3), 30)
@@ -150,7 +149,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 		t.Run("Clean後に最小recLSNが更新される", func(t *testing.T) {
 			t.Parallel()
-			dpt := buffer.NewDirtyPageTable()
+			dpt := NewDirtyPageTable()
 			blkMin := file.NewBlockId("test", 1)
 			blkOther := file.NewBlockId("test", 2)
 			dpt.MarkDirty(blkMin, 10)
@@ -165,7 +164,7 @@ func TestDirtyPageTable(t *testing.T) {
 
 	t.Run("DirtyPageTable: GetSnapshotTable", func(t *testing.T) {
 		t.Parallel()
-		dpt := buffer.NewDirtyPageTable()
+		dpt := NewDirtyPageTable()
 		blk1 := file.NewBlockId("test", 1)
 		blk2 := file.NewBlockId("test", 2)
 		dpt.MarkDirty(blk1, 10)
