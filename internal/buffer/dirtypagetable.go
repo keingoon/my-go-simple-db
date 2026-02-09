@@ -13,11 +13,11 @@ type DirtyPageTable struct {
 }
 
 type DirtyPageEntry struct {
-	blk    *file.BlockId
+	blk    file.BlockId
 	recLSN int32
 }
 
-func NewDirtyPageEntry(blk *file.BlockId, recLSN int32) DirtyPageEntry {
+func NewDirtyPageEntry(blk file.BlockId, recLSN int32) DirtyPageEntry {
 	return DirtyPageEntry{blk, recLSN}
 }
 
@@ -40,7 +40,7 @@ func (dpt *DirtyPageTable) MarkDirty(blk *file.BlockId, recLSN int32) {
 	dpt.mu.Lock()
 	defer dpt.mu.Unlock()
 	if _, ok := dpt.table[key]; !ok {
-		dpt.table[key] = NewDirtyPageEntry(blk, recLSN)
+		dpt.table[key] = NewDirtyPageEntry(*blk, recLSN)
 	}
 }
 
