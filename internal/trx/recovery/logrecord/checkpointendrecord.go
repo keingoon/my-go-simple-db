@@ -56,7 +56,7 @@ func NewCheckpointEndRecord(p *file.Page, lsn int32) *CheckpointEndRecord {
 		blk := file.NewBlockId(fname, blknum)
 		recLSNPos := blkPos + int32Size
 		recLSN := p.GetInt32(int32(recLSNPos))
-		dpt[*blk] = buffer.NewDirtyPageEntry(blk, recLSN)
+		dpt[*blk] = buffer.NewDirtyPageEntry(*blk, recLSN)
 		dptEntryPos = recLSNPos + int32Size
 	}
 
@@ -73,6 +73,10 @@ func (r *CheckpointEndRecord) PrevLSN() int32 {
 
 func (r *CheckpointEndRecord) TxNumber() int32 {
 	return -1
+}
+
+func (r *CheckpointEndRecord) BeginLSN() int32 {
+	return r.beginLSN
 }
 
 func (r *CheckpointEndRecord) ActiveTrxTable() map[int32]CheckpointTxnEntry {
