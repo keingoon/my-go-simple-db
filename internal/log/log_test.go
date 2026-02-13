@@ -821,7 +821,6 @@ func TestFragmentRecord(t *testing.T) {
 		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
 		lsn1, got1 := iter.Next()
 		lsn2, got2 := iter.Next()
-		lsn3, next3 := iter.Next()
 
 		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
 			if lsn1 != startLSN {
@@ -847,14 +846,9 @@ func TestFragmentRecord(t *testing.T) {
 				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn2)
 			}
 		})
-		t.Run("3件目: LSNが-1である（これ以上無い）", func(t *testing.T) {
-			if lsn3 != -1 {
-				t.Fatalf("3件目のLSNは%vであるべきだが%vだった", -1, lsn3)
-			}
-		})
-		t.Run("3件目: レコードがnilである（これ以上無い）", func(t *testing.T) {
-			if next3 != nil {
-				t.Fatalf("3件目のレコードはnilであるべきだが%vだった", next3)
+		t.Run("3件目: レコードがこれ以上無い", func(t *testing.T) {
+			if iter.HasNext() {
+				t.Fatalf("3件目のレコードがこれ以上無いはずだがある")
 			}
 		})
 	})

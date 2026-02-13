@@ -370,11 +370,6 @@ func (logIter *LogIterator) Next() (int32, []byte) {
 	for {
 		logIter.ensureCurrentBlock()
 
-		// これ以上読める論理レコードが無い場合
-		if !logIter.HasNext() {
-			return -1, nil
-		}
-
 		rec := logIter.readPhysicalRecord()
 		currentLSN := logIter.currentLSN
 		logIter.nextToRecordPosition(len(rec))
