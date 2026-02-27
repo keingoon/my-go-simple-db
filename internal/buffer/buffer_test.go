@@ -51,41 +51,42 @@ func TestBuffer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			return NewBuffer(fm, lm)
+			dpt := NewDirtyPageTable()
+			return NewBuffer(fm, lm, dpt)
 		}
 
 		t.Run("Contentsはnilでない", func(t *testing.T) {
 			t.Parallel()
 			if newBuf(t).Contents() == nil {
-				t.Fatalf("Contentsはnilでないべき")
+				t.Errorf("Contentsはnilでないべき")
 			}
 		})
 
 		t.Run("Blockはnilである", func(t *testing.T) {
 			t.Parallel()
 			if got := newBuf(t).Block(); got != nil {
-				t.Fatalf("Blockはnilであるべきだが%vだった", got)
+				t.Errorf("Blockはnilであるべきだが%vだった", got)
 			}
 		})
 
 		t.Run("IsPinnedはfalseである", func(t *testing.T) {
 			t.Parallel()
 			if newBuf(t).IsPinned() {
-				t.Fatalf("IsPinnedはfalseであるべきだがtrueだった")
+				t.Errorf("IsPinnedはfalseであるべきだがtrueだった")
 			}
 		})
 
 		t.Run("ModifyingTxは-1である", func(t *testing.T) {
 			t.Parallel()
 			if got := newBuf(t).ModifyingTx(); got != -1 {
-				t.Fatalf("ModifyingTxは-1であるべきだが%vだった", got)
+				t.Errorf("ModifyingTxは-1であるべきだが%vだった", got)
 			}
 		})
 
 		t.Run("pageLSNは0である", func(t *testing.T) {
 			t.Parallel()
 			if got := newBuf(t).Contents().GetPageLSN(); got != 0 {
-				t.Fatalf("pageLSNは0であるべきだが%vだった", got)
+				t.Errorf("pageLSNは0であるべきだが%vだった", got)
 			}
 		})
 	})
@@ -101,11 +102,12 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := NewBuffer(fm, lm)
+		dpt := NewDirtyPageTable()
+		b := NewBuffer(fm, lm, dpt)
 
 		b.SetModified(txnum, -1)
 		if got := b.ModifyingTx(); got != txnum {
-			t.Fatalf("ModifyingTxは%vであるべきだが%vだった", txnum, got)
+			t.Errorf("ModifyingTxは%vであるべきだが%vだった", txnum, got)
 		}
 	})
 
@@ -121,11 +123,12 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := NewBuffer(fm, lm)
+		dpt := NewDirtyPageTable()
+		b := NewBuffer(fm, lm, dpt)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != lsn {
-			t.Fatalf("pageLSNは%vであるべきだが%vだった", lsn, got)
+			t.Errorf("pageLSNは%vであるべきだが%vだった", lsn, got)
 		}
 	})
 
@@ -141,11 +144,12 @@ func TestBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b := NewBuffer(fm, lm)
+		dpt := NewDirtyPageTable()
+		b := NewBuffer(fm, lm, dpt)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != 0 {
-			t.Fatalf("pageLSNは更新されず0のままであるべきだが%vだった", got)
+			t.Errorf("pageLSNは更新されず0のままであるべきだが%vだった", got)
 		}
 	})
 }
@@ -165,9 +169,10 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 		if got := mgr.Available(); got != numbuffs {
-			t.Fatalf("Availableは%vであるべきだが%vだった", numbuffs, got)
+			t.Errorf("Availableは%vであるべきだが%vだった", numbuffs, got)
 		}
 	})
 
@@ -186,7 +191,8 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -199,13 +205,13 @@ func TestBufferMgr(t *testing.T) {
 
 		t.Run("PinするとAvailableが1減る", func(t *testing.T) {
 			if got := mgr.Available(); got != numbuffs-1 {
-				t.Fatalf("Pin後のAvailableは%vであるべきだが%vだった", numbuffs-1, got)
+				t.Errorf("Pin後のAvailableは%vであるべきだが%vだった", numbuffs-1, got)
 			}
 		})
 
 		t.Run("Pinすると返るBufferはpinnedである", func(t *testing.T) {
 			if !b.IsPinned() {
-				t.Fatalf("Pin後のIsPinnedはtrueであるべきだがfalseだった")
+				t.Errorf("Pin後のIsPinnedはtrueであるべきだがfalseだった")
 			}
 		})
 
@@ -216,7 +222,7 @@ func TestBufferMgr(t *testing.T) {
 				if gotBlk != nil {
 					gotFile, gotNum = gotBlk.FileName(), gotBlk.Number()
 				}
-				t.Fatalf("Pinで返るBufferのBlockは(%s,%d)であるべきだが(%s,%d)だった", blk.FileName(), blk.Number(), gotFile, gotNum)
+				t.Errorf("Pinで返るBufferのBlockは(%s,%d)であるべきだが(%s,%d)だった", blk.FileName(), blk.Number(), gotFile, gotNum)
 			}
 		})
 
@@ -225,13 +231,13 @@ func TestBufferMgr(t *testing.T) {
 
 		t.Run("UnpinするとAvailableが1増える", func(t *testing.T) {
 			if got := mgr.Available(); got != numbuffs {
-				t.Fatalf("Unpin後のAvailableは%vであるべきだが%vだった", numbuffs, got)
+				t.Errorf("Unpin後のAvailableは%vであるべきだが%vだった", numbuffs, got)
 			}
 		})
 
 		t.Run("UnpinするとBufferはunpinnedになる", func(t *testing.T) {
 			if b.IsPinned() {
-				t.Fatalf("Unpin後のIsPinnedはfalseであるべきだがtrueだった")
+				t.Errorf("Unpin後のIsPinnedはfalseであるべきだがtrueだった")
 			}
 		})
 	})
@@ -251,7 +257,8 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 		mgr.Maxtime = 500 // ms
 
 		blk1, err := fm.Append(filename)
@@ -277,7 +284,7 @@ func TestBufferMgr(t *testing.T) {
 		t.Run("Unpin前は待機する", func(t *testing.T) {
 			select {
 			case err := <-done:
-				t.Fatalf("Unpin前にPinが完了してしまった（err=%v）", err)
+				t.Errorf("Unpin前にPinが完了してしまった（err=%v）", err)
 			case <-time.After(30 * time.Millisecond):
 				// まだ待っているのが期待
 			}
@@ -288,10 +295,10 @@ func TestBufferMgr(t *testing.T) {
 			select {
 			case err := <-done:
 				if err != nil {
-					t.Fatalf("Unpin後のPinは成功すべきだが%vだった", err)
+					t.Errorf("Unpin後のPinは成功すべきだが%vだった", err)
 				}
 			case <-time.After(300 * time.Millisecond):
-				t.Fatalf("Unpin後もPinが完了しない")
+				t.Errorf("Unpin後もPinが完了しない")
 			}
 		})
 	})
@@ -311,7 +318,8 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits)
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 		mgr.Maxtime = 50 // ms
 
 		blk1, err := fm.Append(filename)
@@ -331,7 +339,7 @@ func TestBufferMgr(t *testing.T) {
 		_, err = mgr.Pin(ctx, blk2)
 		want := errors.New("buffer abort exception")
 		if err == nil || err.Error() != want.Error() {
-			t.Fatalf("エラーは%vであるべきだが%vだった", want, err)
+			t.Errorf("エラーは%vであるべきだが%vだった", want, err)
 		}
 	})
 
@@ -343,6 +351,8 @@ func TestBufferMgr(t *testing.T) {
 		fm  *file.FileMgr
 		lm  *log.LogMgr
 		mgr *BufferMgr
+
+		dpt *DirtyPageTable
 
 		blk1 *file.BlockId
 		blk2 *file.BlockId
@@ -378,12 +388,15 @@ func TestBufferMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.mgr = NewBufferMgr(f.fm, f.lm, numbuffs, numwaits)
+		dpt := NewDirtyPageTable()
+		f.dpt = dpt
+		f.mgr = NewBufferMgr(f.fm, f.lm, numbuffs, numwaits, dpt)
 
 		f.blk1, err = f.fm.Append(filename)
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		f.blk2, err = f.fm.Append(filename)
 		if err != nil {
 			t.Fatal(err)
@@ -407,6 +420,7 @@ func TestBufferMgr(t *testing.T) {
 		b1p.SetInt32(0, 1)
 		b1p.SetStr(int32Size, "record1")
 		f.b1.SetModified(f.tx1, f.lsn1)
+		f.dpt.MarkDirty(f.blk1, f.lsn1)
 
 		f.logrec2 = createLogRec(2, "record2")
 		f.lsn2, err = f.lm.Append(f.logrec2)
@@ -417,6 +431,7 @@ func TestBufferMgr(t *testing.T) {
 		b2p.SetInt32(0, 2)
 		b2p.SetStr(int32Size, "record2")
 		f.b2.SetModified(f.tx2, f.lsn2)
+		f.dpt.MarkDirty(f.blk2, f.lsn2)
 
 		f.mgr.FlushAll(f.ctx, f.tx1)
 		return f
@@ -427,10 +442,10 @@ func TestBufferMgr(t *testing.T) {
 		f := setupFlushAll(t)
 		gotLog1, err := f.lm.ReadRecordAt(f.lsn1)
 		if err != nil {
-			t.Fatalf("ReadRecordAt(lsn1=%d)が失敗した: %v", f.lsn1, err)
+			t.Errorf("ReadRecordAt(lsn1=%d)が失敗した: %v", f.lsn1, err)
 		}
 		if !bytes.Equal(gotLog1, f.logrec1) {
-			t.Fatalf("lsn1=%dのログが一致しない", f.lsn1)
+			t.Errorf("lsn1=%dのログが一致しない", f.lsn1)
 		}
 	})
 
@@ -442,7 +457,7 @@ func TestBufferMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := p1.GetInt32(0); got != 1 {
-			t.Fatalf("blk1 int32(0)は1であるべきだが%vだった", got)
+			t.Errorf("blk1 int32(0)は1であるべきだが%vだった", got)
 		}
 	})
 
@@ -454,7 +469,7 @@ func TestBufferMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := p1.GetStr(int32Size); got != "record1" {
-			t.Fatalf("blk1 str(%d)は%qであるべきだが%qだった", int32Size, "record1", got)
+			t.Errorf("blk1 str(%d)は%qであるべきだが%qだった", int32Size, "record1", got)
 		}
 	})
 
@@ -466,7 +481,7 @@ func TestBufferMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := p1.GetPageLSN(); got != f.lsn1 {
-			t.Fatalf("blk1 pageLSNは%vであるべきだが%vだった", f.lsn1, got)
+			t.Errorf("blk1 pageLSNは%vであるべきだが%vだった", f.lsn1, got)
 		}
 	})
 
@@ -478,7 +493,7 @@ func TestBufferMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := p2.GetInt32(0); got != 0 {
-			t.Fatalf("blk2 int32(0)は0であるべきだが%vだった", got)
+			t.Errorf("blk2 int32(0)は0であるべきだが%vだった", got)
 		}
 	})
 
@@ -490,7 +505,7 @@ func TestBufferMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := p2.GetStr(int32Size); got != "" {
-			t.Fatalf("blk2 str(%d)は空文字であるべきだが%qだった", int32Size, got)
+			t.Errorf("blk2 str(%d)は空文字であるべきだが%qだった", int32Size, got)
 		}
 	})
 
@@ -498,7 +513,7 @@ func TestBufferMgr(t *testing.T) {
 		t.Parallel()
 		f := setupFlushAll(t)
 		if got := f.b1.ModifyingTx(); got != -1 {
-			t.Fatalf("FlushAll後のb1 ModifyingTxは-1であるべきだが%vだった", got)
+			t.Errorf("FlushAll後のb1 ModifyingTxは-1であるべきだが%vだった", got)
 		}
 	})
 
@@ -506,7 +521,23 @@ func TestBufferMgr(t *testing.T) {
 		t.Parallel()
 		f := setupFlushAll(t)
 		if got := f.b2.ModifyingTx(); got != 2 {
-			t.Fatalf("FlushAll後のb2 ModifyingTxは%vであるべきだが%vだった", int32(2), got)
+			t.Errorf("FlushAll後のb2 ModifyingTxは%vであるべきだが%vだった", int32(2), got)
+		}
+	})
+
+	t.Run("BufferMgr: FlushAll(tx)後に登録したDirtyPageの該当txのBlkのEntryが削除されている", func(t *testing.T) {
+		t.Parallel()
+		f := setupFlushAll(t)
+		if _, ok := f.dpt.GetPage(f.blk1); ok {
+			t.Errorf("FlushAll後のDirtyPageのblk1のEntryが存在しないべきだが存在した")
+		}
+	})
+
+	t.Run("BufferMgr: FlushAll(tx)後に登録したDirtyPageの該当txのBlkのEntryが削除されていない", func(t *testing.T) {
+		t.Parallel()
+		f := setupFlushAll(t)
+		if _, ok := f.dpt.GetPage(f.blk2); !ok {
+			t.Errorf("FlushAll後のDirtyPageのblk2のEntryが存在するべきだが存在しない")
 		}
 	})
 }
