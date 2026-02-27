@@ -19,11 +19,12 @@ type Buffer struct {
 	txnum    int32
 	recLSN   int32
 	pageLSN  int32
+	dpt      *DirtyPageTable
 }
 
-func NewBuffer(fm *file.FileMgr, lm *log.LogMgr) *Buffer {
+func NewBuffer(fm *file.FileMgr, lm *log.LogMgr, dpt *DirtyPageTable) *Buffer {
 	p := file.NewPage(fm.BlockSize())
-	return &Buffer{fm, lm, p, nil, 0, -1, -1, -1}
+	return &Buffer{fm, lm, p, nil, 0, -1, -1, -1, dpt}
 }
 
 func (buff *Buffer) Contents() *file.Page {
@@ -68,6 +69,7 @@ func (buff *Buffer) flush() {
 		fm.Write(blk, contents)
 		buff.txnum = -1
 		buff.recLSN = -1
+		buff.dpt.Clean(blk)
 	}
 }
 
@@ -166,12 +168,13 @@ type BufferMgr struct {
 	mu            sync.Mutex
 	numWaits      int32
 	waitCh        chan *waitToken
+	dpt           *DirtyPageTable
 }
 
-func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int32) *BufferMgr {
+func NewBufferMgr(fm *file.FileMgr, lm *log.LogMgr, numbuffs int32, numwaits int32, dpt *DirtyPageTable) *BufferMgr {
 	bufferpool := make([]*Buffer, numbuffs)
 	for i := 0; i < int(numbuffs); i++ {
-		bufferpool[i] = NewBuffer(fm, lm)
+		bufferpool[i] = NewBuffer(fm, lm, dpt)
 	}
 
 	blkBufferMap := make(map[uint64]*Buffer, numbuffs)

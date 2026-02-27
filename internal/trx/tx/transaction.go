@@ -11,6 +11,7 @@ import (
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/access"
 	"github.com/keingoon/simpledb/internal/trx/bufferlist"
+	"github.com/keingoon/simpledb/internal/trx/concurrency"
 	"github.com/keingoon/simpledb/internal/trx/recovery"
 )
 
@@ -25,11 +26,11 @@ type TransactionMgr struct {
 	txAccess    *access.Transaction
 }
 
-func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, atTbl *recovery.ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*TransactionMgr, error) {
+func NewTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, atTbl *recovery.ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*TransactionMgr, error) {
 	mybuffers := bufferlist.NewBufferList(bm)
 	txnum := nextTxNumber()
-	txAccess := access.NewTransaction(fm, lm, bm, txnum, mybuffers)
-	recoveryMgr, err := recovery.NewRecoveryMgr(fm, lm, bm, txAccess, txnum, atTbl, dptTbl)
+	txAccess := access.NewTransaction(locktbl, fm, lm, bm, txnum, mybuffers)
+	recoveryMgr, err := recovery.NewRecoveryMgr(locktbl, fm, lm, bm, txAccess, txnum, atTbl, dptTbl)
 	if err != nil {
 		return nil, fmt.Errorf("could not create recovery manager: %w", err)
 	}
@@ -40,6 +41,21 @@ func NewTransactionMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, a
 		txnum,
 		mybuffers,
 		txAccess,
+	}
+	return txmgr, nil
+}
+
+func NewRecoveryTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) (*TransactionMgr, error) {
+	mybuffers := bufferlist.NewBufferList(bm)
+	txAccess := access.NewRecoveryTransaction(locktbl, fm, lm, bm)
+	recoveryMgr := recovery.NewRecoveryMgrForRecover(locktbl, fm, lm, bm)
+	txmgr := &TransactionMgr{
+		recoveryMgr: recoveryMgr,
+		bm:          bm,
+		fm:          fm,
+		txnum:       access.RecoveryTxNum,
+		mybuffers:   mybuffers,
+		txAccess:    txAccess,
 	}
 	return txmgr, nil
 }

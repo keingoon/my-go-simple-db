@@ -9,6 +9,7 @@ import (
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/access"
+	"github.com/keingoon/simpledb/internal/trx/concurrency"
 	"github.com/keingoon/simpledb/internal/trx/recovery/logrecord"
 )
 
@@ -37,6 +38,7 @@ type RedoableLogRecord interface {
 }
 
 type RecoveryMgr struct {
+	locktbl  *concurrency.LockTable
 	fm       *file.FileMgr
 	lm       *log.LogMgr
 	bm       *buffer.BufferMgr
@@ -46,98 +48,122 @@ type RecoveryMgr struct {
 	dptTbl   *buffer.DirtyPageTable
 }
 
-func NewRecoveryMgr(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txAccess *access.Transaction, txnum int32, atTbl *ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*RecoveryMgr, error) {
+func NewRecoveryMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txAccess *access.Transaction, txnum int32, atTbl *ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*RecoveryMgr, error) {
 	lsn, err := logrecord.WriteStartToLog(lm, txnum)
 	if err != nil {
 		return nil, fmt.Errorf("could not write start to log: %w", err)
 	}
 	atTbl.setTrx(txnum, running, lsn)
-	return &RecoveryMgr{fm, lm, bm, txAccess, txnum, atTbl, dptTbl}, nil
+	return &RecoveryMgr{locktbl, fm, lm, bm, txAccess, txnum, atTbl, dptTbl}, nil
 }
 
-func (rMgr *RecoveryMgr) Commit(ctx context.Context) error {
-	// TODO: ARIES style recoveryを検討する
-	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
+func NewRecoveryMgrForRecover(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) *RecoveryMgr {
+	txAccess := access.NewRecoveryTransaction(locktbl, fm, lm, bm)
+	atTbl := newActiveTrxTable()
+	dptTbl := buffer.NewDirtyPageTable()
+	return &RecoveryMgr{
+		locktbl:  locktbl,
+		fm:       fm,
+		lm:       lm,
+		bm:       bm,
+		txAccess: txAccess,
+		txnum:    access.RecoveryTxNum,
+		atTbl:    atTbl,
+		dptTbl:   dptTbl,
+	}
+}
+
+func (rMgr *RecoveryMgr) Commit(ctx context.Context) (int32, error) {
 	prevLSN, err := rMgr.atTbl.getLastLSN(rMgr.txnum)
 	if err != nil {
-		return fmt.Errorf("could not get last LSN from table: %w", err)
+		return -1, fmt.Errorf("could not get last LSN from table: %w", err)
 	}
 
 	commitLSN, err := logrecord.WriteCommitToLog(rMgr.lm, prevLSN, rMgr.txnum)
 	if err != nil {
-		return fmt.Errorf("could not commit: %w", err)
+		return -1, fmt.Errorf("could not commit: %w", err)
 	}
 	rMgr.lm.Flush(commitLSN)
 
 	rMgr.atTbl.setTrx(rMgr.txnum, commited, commitLSN)
 
-	if _, err := logrecord.WriteEndToLog(rMgr.lm, commitLSN, rMgr.txnum); err != nil {
-		return fmt.Errorf("could not write end to log: %w", err)
+	endLSN, err := logrecord.WriteEndToLog(rMgr.lm, commitLSN, rMgr.txnum)
+	if err != nil {
+		return -1, fmt.Errorf("could not write end to log: %w", err)
 	}
 	rMgr.atTbl.removeTrx(rMgr.txnum)
 
-	return nil
+	return endLSN, nil
 }
 
-func (rMgr *RecoveryMgr) Rollback(ctx context.Context) error {
-	// TODO: ARIES style recoveryを検討する
-	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
+func (rMgr *RecoveryMgr) Rollback(ctx context.Context) (int32, error) {
 	prevLSN, err := rMgr.atTbl.getLastLSN(rMgr.txnum)
 	if err != nil {
-		return fmt.Errorf("could not get last LSN from table: %w", err)
+		return -1, fmt.Errorf("could not get last LSN from table: %w", err)
 	}
 
 	abortLSN, err := logrecord.WriteAbortToLog(rMgr.lm, prevLSN, rMgr.txnum)
 	if err != nil {
-		return fmt.Errorf("could not abort: %w", err)
+		return -1, fmt.Errorf("could not abort: %w", err)
 	}
 	rMgr.lm.Flush(abortLSN)
 	clrLastLSN, err := rMgr.doRollback(ctx, rMgr.txAccess, rMgr.txnum, prevLSN, abortLSN)
 	if err != nil {
-		return fmt.Errorf("could not rollback: %w", err)
+		return -1, fmt.Errorf("could not rollback: %w", err)
 	}
 
 	rMgr.atTbl.setTrx(rMgr.txnum, aborting, clrLastLSN)
-	if _, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, rMgr.txnum); err != nil {
-		return fmt.Errorf("could not write end to log: %w", err)
+	endLSN, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, rMgr.txnum)
+	if err != nil {
+		return -1, fmt.Errorf("could not write end to log: %w", err)
 	}
 	rMgr.atTbl.removeTrx(rMgr.txnum)
 
-	return nil
+	return endLSN, nil
 }
 
-func (rMgr *RecoveryMgr) Checkpoint(ctx context.Context) error {
-	// TODO: ARIES style recoveryを検討する
-	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
+func (rMgr *RecoveryMgr) Checkpoint(ctx context.Context) (int32, error) {
 	beginLSN, err := logrecord.WriteCheckpointBeginToLog(rMgr.lm)
 	if err != nil {
-		return fmt.Errorf("could not begincheckpoint: %w", err)
+		return -1, fmt.Errorf("could not begincheckpoint: %w", err)
 	}
 
 	attSnapShot := rMgr.atTbl.getSnapshotTrxTable()
 	dptSnapShot := rMgr.dptTbl.GetSnapshotTable()
 	endLSN, err := logrecord.WriteCheckpointEndToLog(rMgr.lm, beginLSN, attSnapShot, dptSnapShot)
 	if err != nil {
-		return fmt.Errorf("could not end checkpoint: %w", err)
+		return -1, fmt.Errorf("could not end checkpoint: %w", err)
 	}
 	rMgr.lm.Flush(endLSN)
 
 	if err := rMgr.lm.WriteMasterLSN(beginLSN); err != nil {
-		return fmt.Errorf("could not write master LSN: %w", err)
+		return -1, fmt.Errorf("could not write master LSN: %w", err)
 	}
-	return nil
+	return endLSN, nil
 }
 
 func (rMgr *RecoveryMgr) Recover(ctx context.Context) error {
-	// TODO: ARIES style recoveryを検討する
-	// rMgr.bm.FlushAll(ctx, rMgr.txnum)
-	var lsn int32
-	lsn, err := logrecord.WriteCheckpointBeginToLog(rMgr.lm)
-	if err != nil {
-		return fmt.Errorf("could not recover: %w", err)
+	recovAtTbl := newActiveTrxTable()
+	recovDptTbl := buffer.NewDirtyPageTable()
+
+	recovTxAccess := access.NewRecoveryTransaction(rMgr.locktbl, rMgr.fm, rMgr.lm, rMgr.bm)
+
+	// analyze phase
+	if err := rMgr.doAnalyzePhase(recovAtTbl, recovDptTbl); err != nil {
+		return fmt.Errorf("could not analyze phase: %w", err)
 	}
-	rMgr.lm.Flush(lsn)
-	return rMgr.doRecover(ctx)
+
+	// redo phase
+	if err := rMgr.doRedoPhase(ctx, recovTxAccess, recovAtTbl, recovDptTbl); err != nil {
+		return fmt.Errorf("could not redo phase: %w", err)
+	}
+
+	// undo phase
+	if err := rMgr.doUndoPhase(ctx, recovTxAccess, recovAtTbl); err != nil {
+		return fmt.Errorf("could not redo phase: %w", err)
+	}
+
+	return nil
 }
 
 func (rMgr *RecoveryMgr) SetInt16(buff *buffer.Buffer, offset int32, newVal int16) (int32, error) {
@@ -268,31 +294,7 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, txAccess *access.Transa
 	return rMgr.doRollback(ctx, txAccess, txnum, undoNextLSN, lastLSN)
 }
 
-func (rMgr *RecoveryMgr) doRecover(ctx context.Context) error {
-	recovAtTbl := newActiveTrxTable()
-	recovDptTbl := buffer.NewDirtyPageTable()
-
-	recovTxAccess := access.NewRecoveryTransaction(rMgr.fm, rMgr.lm, rMgr.bm, rMgr.txnum)
-
-	// analyze phase
-	if err := rMgr.doAnalyzePhase(ctx, recovAtTbl, recovDptTbl); err != nil {
-		return fmt.Errorf("could not analyze phase: %w", err)
-	}
-
-	// redo phase
-	if err := rMgr.doRedoPhase(ctx, recovTxAccess, recovAtTbl, recovDptTbl); err != nil {
-		return fmt.Errorf("could not redo phase: %w", err)
-	}
-
-	// undo phase
-	if err := rMgr.doUndoPhase(ctx, recovTxAccess, recovAtTbl); err != nil {
-		return fmt.Errorf("could not redo phase: %w", err)
-	}
-
-	return nil
-}
-
-func (rMgr *RecoveryMgr) doAnalyzePhase(ctx context.Context, recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
+func (rMgr *RecoveryMgr) doAnalyzePhase(recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
 	masterLSN, err := rMgr.lm.ReadMasterLSN()
 	if err != nil {
 		return fmt.Errorf("could not read master LSN: %w", err)
@@ -342,46 +344,45 @@ func (rMgr *RecoveryMgr) doAnalyzePhase(ctx context.Context, recovAtTbl *ActiveT
 
 func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.Transaction, recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
 	minRecLSN, ok := recovDptTbl.GetMinRecLSN()
-	if !ok {
-		return nil
-	}
 
-	iter, err := rMgr.lm.Iterater(minRecLSN)
-	if err != nil {
-		return fmt.Errorf("could not get log iterator: %w", err)
-	}
-
-	// 順次開始時点からRedoする
-	for iter.HasNext() {
-		lsn, bytes := iter.Next()
-		rec := logrecord.CreateLogRecord(bytes, lsn)
-		if rec == nil {
-			return fmt.Errorf("could not create log record at lsn#%d", lsn)
+	if ok {
+		iter, err := rMgr.lm.Iterater(minRecLSN)
+		if err != nil {
+			return fmt.Errorf("could not get log iterator: %w", err)
 		}
 
-		switch setRec := rec.(type) {
-		case RedoableLogRecord:
-			// LSNがDirty Page Tableに存在しない場合はRedoしない
-			dptEntry, ok := recovDptTbl.GetPage(setRec.Blk())
-			if !ok {
-				continue
-			}
-			// LSNがDirty Page TableのLSN未満場合はRedoしない
-			if lsn < dptEntry.GetRecLSN() {
-				continue
-			}
-			// LSNがディスク上のPageのLSN以下の場合はRedoしない
-			diskPageLSN, err := rMgr.pageLSN(ctx, rMgr.txnum, setRec.Blk())
-			if err != nil {
-				return fmt.Errorf("could not get disk page LSN: %w", err)
-			}
-			if lsn <= diskPageLSN {
-				continue
+		// 順次開始時点からRedoする
+		for iter.HasNext() {
+			lsn, bytes := iter.Next()
+			rec := logrecord.CreateLogRecord(bytes, lsn)
+			if rec == nil {
+				return fmt.Errorf("could not create log record at lsn#%d", lsn)
 			}
 
-			setRec.RedoPage(ctx, recovTxAccess)
-		default:
-			continue
+			switch setRec := rec.(type) {
+			case RedoableLogRecord:
+				// LSNがDirty Page Tableに存在しない場合はRedoしない
+				dptEntry, ok := recovDptTbl.GetPage(setRec.Blk())
+				if !ok {
+					continue
+				}
+				// LSNがDirty Page TableのLSN未満場合はRedoしない
+				if lsn < dptEntry.GetRecLSN() {
+					continue
+				}
+				// LSNがディスク上のPageのLSN以下の場合はRedoしない
+				diskPageLSN, err := rMgr.pageLSN(setRec.Blk())
+				if err != nil {
+					return fmt.Errorf("could not get disk page LSN: %w", err)
+				}
+				if lsn <= diskPageLSN {
+					continue
+				}
+
+				setRec.RedoPage(ctx, recovTxAccess)
+			default:
+				continue
+			}
 		}
 	}
 
@@ -390,14 +391,21 @@ func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.
 	if !ok {
 		return nil
 	}
+	var maxEndLSN int32 = -1
 	for _, commitTrx := range commitTrxs {
 		lsn := commitTrx.getLastLSN()
 		txnum := commitTrx.getTxnum()
-		_, err := logrecord.WriteEndToLog(rMgr.lm, lsn, txnum)
+		endLSN, err := logrecord.WriteEndToLog(rMgr.lm, lsn, txnum)
 		if err != nil {
 			return fmt.Errorf("could not write end to log: %w", err)
 		}
+		if endLSN > maxEndLSN {
+			maxEndLSN = endLSN
+		}
 		recovAtTbl.removeTrx(txnum)
+	}
+	if maxEndLSN != -1 {
+		rMgr.lm.Flush(maxEndLSN)
 	}
 
 	return nil
@@ -405,6 +413,7 @@ func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.
 
 func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovTxAccess *access.Transaction, recovAtTbl *ActiveTrxTable) error {
 	attEnties := recovAtTbl.getTable()
+	var maxEndLSN int32 = -1
 	for _, entry := range attEnties {
 		status := entry.getStatus()
 		if status == commited {
@@ -430,19 +439,26 @@ func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovTxAccess *access.
 		}
 
 		recovAtTbl.setTrx(txnum, aborting, clrLastLSN)
-		if _, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, txnum); err != nil {
+		endLSN, err := logrecord.WriteEndToLog(rMgr.lm, clrLastLSN, txnum)
+		if err != nil {
 			return fmt.Errorf("could not write end to log: %w", err)
 		}
+		if endLSN > maxEndLSN {
+			maxEndLSN = endLSN
+		}
+
 		recovAtTbl.removeTrx(txnum)
+	}
+	if maxEndLSN != -1 {
+		rMgr.lm.Flush(maxEndLSN)
 	}
 	return nil
 }
 
-func (rMgr *RecoveryMgr) pageLSN(ctx context.Context, txnum int32, blk *file.BlockId) (int32, error) {
-	buff, err := rMgr.bm.Pin(ctx, blk)
-	if err != nil {
-		return -1, fmt.Errorf("could not pin buffer: %w", err)
+func (rMgr *RecoveryMgr) pageLSN(blk *file.BlockId) (int32, error) {
+	onDiskPage := file.NewPage(rMgr.fm.BlockSize())
+	if err := rMgr.fm.Read(blk, onDiskPage); err != nil {
+		return -1, fmt.Errorf("could not read page from disk: %w", err)
 	}
-	defer rMgr.bm.Unpin(ctx, buff)
-	return buff.Contents().GetPageLSN(), nil
+	return onDiskPage.GetPageLSN(), nil
 }

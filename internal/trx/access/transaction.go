@@ -24,6 +24,12 @@ const (
 	LockNoLock
 )
 
+const (
+	// RecoveryTxNum is reserved for recovery-only transaction context.
+	// -1 is already used as buffer's sentinel "no modifying tx".
+	RecoveryTxNum int32 = -2
+)
+
 type Transaction struct {
 	concurMgr  *concurrency.ConcurrencyMgr
 	bm         *buffer.BufferMgr
@@ -33,8 +39,8 @@ type Transaction struct {
 	lockPolicy LockPolicy
 }
 
-func NewTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32, mybuffers *bufferlist.BufferList) *Transaction {
-	concurMgr := concurrency.NewConcurrencyMgr()
+func NewTransaction(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32, mybuffers *bufferlist.BufferList) *Transaction {
+	concurMgr := concurrency.NewConcurrencyMgr(locktbl)
 	// デフォルトは Strict2PL
 	lockPolicy := LockStrict2PL
 	tx := &Transaction{
@@ -48,16 +54,16 @@ func NewTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnu
 	return tx
 }
 
-func NewRecoveryTransaction(fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, txnum int32) *Transaction {
+func NewRecoveryTransaction(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) *Transaction {
 	// recovery 用は no-lock
-	concurMgr := concurrency.NewConcurrencyMgr()
+	concurMgr := concurrency.NewConcurrencyMgr(locktbl)
 	mybuffers := bufferlist.NewBufferList(bm)
 	lockPolicy := LockNoLock
 	tx := &Transaction{
 		concurMgr,
 		bm,
 		fm,
-		txnum,
+		RecoveryTxNum,
 		mybuffers,
 		lockPolicy,
 	}

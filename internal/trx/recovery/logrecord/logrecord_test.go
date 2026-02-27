@@ -600,13 +600,13 @@ func TestLogRecord(t *testing.T) {
 				t.Fatalf("expected not nil")
 			}
 
-			t.Run("Opはstartである", func(t *testing.T) {
-				if rec.Op() != start {
+		t.Run("Opはstartである", func(t *testing.T) {
+			if rec.Op() != start {
 					t.Errorf("Opが一致しない: want=%d got=%d", start, rec.Op())
-				}
-			})
-			t.Run("PrevLSNは-1である", func(t *testing.T) {
-				if rec.PrevLSN() != -1 {
+			}
+		})
+		t.Run("PrevLSNは-1である", func(t *testing.T) {
+			if rec.PrevLSN() != -1 {
 					t.Errorf("PrevLSNが一致しない: want=%d got=%d", -1, rec.PrevLSN())
 				}
 			})
