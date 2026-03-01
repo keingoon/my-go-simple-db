@@ -9,6 +9,7 @@ import (
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/bufferlist"
+	"github.com/keingoon/simpledb/internal/trx/concurrency"
 )
 
 const (
@@ -19,7 +20,7 @@ const (
 	numwaits  = 5
 )
 
-func initTx(t *testing.T, txnum int32) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr, *Transaction) {
+func initTx(t *testing.T, locktbl *concurrency.LockTable, txnum int32) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr, *Transaction) {
 	t.Helper()
 
 	fm, err := file.NewFileMgr(t.TempDir(), blocksize)
@@ -30,16 +31,17 @@ func initTx(t *testing.T, txnum int32) (*file.FileMgr, *log.LogMgr, *buffer.Buff
 	if err != nil {
 		t.Fatalf("failed to create LogMgr: %v", err)
 	}
-	bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits)
+	dpt := buffer.NewDirtyPageTable()
+	bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 	mybuffers := bufferlist.NewBufferList(bm)
 
-	tx := NewTransaction(fm, lm, bm, txnum, mybuffers)
+	tx := NewTransaction(locktbl, fm, lm, bm, txnum, mybuffers)
 	return fm, lm, bm, tx
 }
 
 func TestTransaction(t *testing.T) {
 	t.Run("NewTransaction", func(t *testing.T) {
-		_, _, bm, tx := initTx(t, 1)
+		_, _, bm, tx := initTx(t, concurrency.NewLockTable(), 1)
 
 		if tx == nil {
 			t.Fatal("NewTransaction returned nil")
@@ -59,11 +61,50 @@ func TestTransaction(t *testing.T) {
 		if tx.txnum != 1 {
 			t.Errorf("expected txnum 1, got %d", tx.txnum)
 		}
+		if tx.lockPolicy != LockStrict2PL {
+			t.Errorf("expected lockPolicy %d, got %d", LockStrict2PL, tx.lockPolicy)
+		}
+	})
+
+	t.Run("NewRecoveryTransaction", func(t *testing.T) {
+		fm, err := file.NewFileMgr(t.TempDir(), blocksize)
+		if err != nil {
+			t.Fatalf("failed to create FileMgr: %v", err)
+		}
+		lm, err := log.NewLogMgr(fm, logfile)
+		if err != nil {
+			t.Fatalf("failed to create LogMgr: %v", err)
+		}
+		dpt := buffer.NewDirtyPageTable()
+		bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		tx := NewRecoveryTransaction(concurrency.NewLockTable(), fm, lm, bm)
+
+		if tx == nil {
+			t.Fatal("NewRecoveryTransaction returned nil")
+		}
+		if tx.bm != bm {
+			t.Errorf("expected bm to be set")
+		}
+		if tx.fm == nil {
+			t.Errorf("expected fm to be set")
+		}
+		if tx.concurMgr == nil {
+			t.Errorf("expected concurMgr to be set")
+		}
+		if tx.mybuffers == nil {
+			t.Errorf("expected mybuffers to be initialized")
+		}
+		if tx.txnum != RecoveryTxNum {
+			t.Errorf("expected txnum %d, got %d", RecoveryTxNum, tx.txnum)
+		}
+		if tx.lockPolicy != LockNoLock {
+			t.Errorf("expected lockPolicy %d, got %d", LockNoLock, tx.lockPolicy)
+		}
 	})
 
 	t.Run("Pin and Unpin", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, bm, tx := initTx(t, 1)
+		fm, _, bm, tx := initTx(t, concurrency.NewLockTable(), 1)
 
 		blk, err := fm.Append(filename)
 		if err != nil {
@@ -91,7 +132,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetInt16 and GetInt16", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 2)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 2)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
@@ -126,7 +167,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetInt32 and GetInt32", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 3)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 3)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
@@ -158,7 +199,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetStr and GetStr", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 4)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 4)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
@@ -190,7 +231,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetBool and GetBool", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 5)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 5)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
@@ -222,7 +263,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SetDate and GetDate", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 6)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 6)
 		blk, err := fm.Append(filename)
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
@@ -254,8 +295,9 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SLock and Unlock", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx1 := initTx(t, 7)
-		_, _, _, tx2 := initTx(t, 8)
+		locktbl := concurrency.NewLockTable()
+		fm, _, _, tx1 := initTx(t, locktbl, 7)
+		_, _, _, tx2 := initTx(t, locktbl, 8)
 
 		blk, err := fm.Append("testfile_lock_slock")
 		if err != nil {
@@ -290,8 +332,9 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("XLock and Unlock", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx1 := initTx(t, 9)
-		_, _, _, tx2 := initTx(t, 10)
+		locktbl := concurrency.NewLockTable()
+		fm, _, _, tx1 := initTx(t, locktbl, 9)
+		_, _, _, tx2 := initTx(t, locktbl, 10)
 
 		blk, err := fm.Append("testfile_lock_xlock")
 		if err != nil {
@@ -326,7 +369,7 @@ func TestTransaction(t *testing.T) {
 
 	t.Run("SLock and XLock", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, 11)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 11)
 
 		blk, err := fm.Append("testfile_lock_upgrade")
 		if err != nil {
