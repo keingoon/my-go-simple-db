@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,69 +41,71 @@ func initTx(t *testing.T, locktbl *concurrency.LockTable, txnum int32) (*file.Fi
 }
 
 func TestTransaction(t *testing.T) {
-	t.Run("NewTransaction", func(t *testing.T) {
-		_, _, bm, tx := initTx(t, concurrency.NewLockTable(), 1)
+	t.Run("コンストラクタ", func(t *testing.T) {
+		t.Run("NewTransaction: 通常トランザクションを生成するとStrict2PLで初期化される", func(t *testing.T) {
+			_, _, bm, tx := initTx(t, concurrency.NewLockTable(), 1)
 
-		if tx == nil {
-			t.Fatal("NewTransaction returned nil")
-		}
-		if tx.bm != bm {
-			t.Errorf("expected bm to be set")
-		}
-		if tx.fm == nil {
-			t.Errorf("expected fm to be set")
-		}
-		if tx.concurMgr == nil {
-			t.Errorf("expected concurMgr to be set")
-		}
-		if tx.mybuffers == nil {
-			t.Errorf("expected mybuffers to be initialized")
-		}
-		if tx.txnum != 1 {
-			t.Errorf("expected txnum 1, got %d", tx.txnum)
-		}
-		if tx.lockPolicy != LockStrict2PL {
-			t.Errorf("expected lockPolicy %d, got %d", LockStrict2PL, tx.lockPolicy)
-		}
+			if tx == nil {
+				t.Fatal("NewTransaction returned nil")
+			}
+			if tx.bm != bm {
+				t.Errorf("expected bm to be set")
+			}
+			if tx.fm == nil {
+				t.Errorf("expected fm to be set")
+			}
+			if tx.concurMgr == nil {
+				t.Errorf("expected concurMgr to be set")
+			}
+			if tx.mybuffers == nil {
+				t.Errorf("expected mybuffers to be initialized")
+			}
+			if tx.txnum != 1 {
+				t.Errorf("expected txnum 1, got %d", tx.txnum)
+			}
+			if tx.lockPolicy != LockStrict2PL {
+				t.Errorf("expected lockPolicy %d, got %d", LockStrict2PL, tx.lockPolicy)
+			}
+		})
+
+		t.Run("NewRecoveryTransaction: リカバリ用トランザクションを生成するとLockNoLockで初期化される", func(t *testing.T) {
+			fm, err := file.NewFileMgr(t.TempDir(), blocksize)
+			if err != nil {
+				t.Fatalf("failed to create FileMgr: %v", err)
+			}
+			lm, err := log.NewLogMgr(fm, logfile)
+			if err != nil {
+				t.Fatalf("failed to create LogMgr: %v", err)
+			}
+			dpt := buffer.NewDirtyPageTable()
+			bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+			tx := NewRecoveryTransaction(concurrency.NewLockTable(), fm, lm, bm)
+
+			if tx == nil {
+				t.Fatal("NewRecoveryTransaction returned nil")
+			}
+			if tx.bm != bm {
+				t.Errorf("expected bm to be set")
+			}
+			if tx.fm == nil {
+				t.Errorf("expected fm to be set")
+			}
+			if tx.concurMgr == nil {
+				t.Errorf("expected concurMgr to be set")
+			}
+			if tx.mybuffers == nil {
+				t.Errorf("expected mybuffers to be initialized")
+			}
+			if tx.txnum != RecoveryTxNum {
+				t.Errorf("expected txnum %d, got %d", RecoveryTxNum, tx.txnum)
+			}
+			if tx.lockPolicy != LockNoLock {
+				t.Errorf("expected lockPolicy %d, got %d", LockNoLock, tx.lockPolicy)
+			}
+		})
 	})
 
-	t.Run("NewRecoveryTransaction", func(t *testing.T) {
-		fm, err := file.NewFileMgr(t.TempDir(), blocksize)
-		if err != nil {
-			t.Fatalf("failed to create FileMgr: %v", err)
-		}
-		lm, err := log.NewLogMgr(fm, logfile)
-		if err != nil {
-			t.Fatalf("failed to create LogMgr: %v", err)
-		}
-		dpt := buffer.NewDirtyPageTable()
-		bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
-		tx := NewRecoveryTransaction(concurrency.NewLockTable(), fm, lm, bm)
-
-		if tx == nil {
-			t.Fatal("NewRecoveryTransaction returned nil")
-		}
-		if tx.bm != bm {
-			t.Errorf("expected bm to be set")
-		}
-		if tx.fm == nil {
-			t.Errorf("expected fm to be set")
-		}
-		if tx.concurMgr == nil {
-			t.Errorf("expected concurMgr to be set")
-		}
-		if tx.mybuffers == nil {
-			t.Errorf("expected mybuffers to be initialized")
-		}
-		if tx.txnum != RecoveryTxNum {
-			t.Errorf("expected txnum %d, got %d", RecoveryTxNum, tx.txnum)
-		}
-		if tx.lockPolicy != LockNoLock {
-			t.Errorf("expected lockPolicy %d, got %d", LockNoLock, tx.lockPolicy)
-		}
-	})
-
-	t.Run("Pin and Unpin", func(t *testing.T) {
+	t.Run("Pin/Unpin: Pin後にUnpinするとバッファ状態が元に戻る", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, bm, tx := initTx(t, concurrency.NewLockTable(), 1)
 
@@ -130,7 +133,7 @@ func TestTransaction(t *testing.T) {
 		}
 	})
 
-	t.Run("SetInt16 and GetInt16", func(t *testing.T) {
+	t.Run("SetInt16/GetInt16: 書き込んだint16を読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 2)
 		blk, err := fm.Append(filename)
@@ -165,7 +168,7 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
-	t.Run("SetInt32 and GetInt32", func(t *testing.T) {
+	t.Run("SetInt32/GetInt32: 書き込んだint32を読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 3)
 		blk, err := fm.Append(filename)
@@ -197,7 +200,7 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
-	t.Run("SetStr and GetStr", func(t *testing.T) {
+	t.Run("SetStr/GetStr: 書き込んだ文字列を読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 4)
 		blk, err := fm.Append(filename)
@@ -229,7 +232,7 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
-	t.Run("SetBool and GetBool", func(t *testing.T) {
+	t.Run("SetBool/GetBool: 書き込んだboolを読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 5)
 		blk, err := fm.Append(filename)
@@ -261,7 +264,7 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
-	t.Run("SetDate and GetDate", func(t *testing.T) {
+	t.Run("SetDate/GetDate: 書き込んだ日付を読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 6)
 		blk, err := fm.Append(filename)
@@ -293,99 +296,178 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
-	t.Run("SLock and Unlock", func(t *testing.T) {
-		ctx := context.Background()
-		locktbl := concurrency.NewLockTable()
-		fm, _, _, tx1 := initTx(t, locktbl, 7)
-		_, _, _, tx2 := initTx(t, locktbl, 8)
+	t.Run("SLock/Unlock", func(t *testing.T) {
+		t.Run("SLock保持中は他トランザクションのXLockがタイムアウトまで待機する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 7)
+			_, _, _, tx2 := initTx(t, locktbl, 8)
 
-		blk, err := fm.Append("testfile_lock_slock")
-		if err != nil {
-			t.Fatalf("append block failed: %v", err)
-		}
+			blk, err := fm.Append("testfile_lock_slock_block")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.SLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 SLock failed: %v", err)
+			}
 
-		// Acquire SLock with tx1
-		tx1.SLock(ctx, blk)
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- tx2.XLock(lockCtx, blk)
+			}()
 
-		// XLock on tx2 should block until timeout while SLock is held
-		tCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		tx2.XLock(tCtx, blk)
-		blocked := time.Since(start)
-		if blocked < 40*time.Millisecond {
-			t.Errorf("expected XLock to block ~50ms while SLock held, got %v", blocked)
-		}
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected timeout while tx1 holds SLock, got %v", err)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected XLock to return by context timeout")
+			}
 
-		// After Unlock by tx1, XLock on tx2 should succeed quickly
-		tx1.Unlock(ctx, blk)
-		start = time.Now()
-		tx2.XLock(context.Background(), blk)
-		elapsed := time.Since(start)
-		if elapsed > 200*time.Millisecond {
-			t.Errorf("expected XLock to succeed quickly after Unlock, took %v", elapsed)
-		}
+			tx1.Unlock(ctx, blk)
+		})
 
-		// Cleanup
-		tx2.Unlock(ctx, blk)
+		t.Run("SLockを解放すると他トランザクションのXLockが取得できる", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 9)
+			_, _, _, tx2 := initTx(t, locktbl, 10)
+
+			blk, err := fm.Append("testfile_lock_slock_release")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.SLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 SLock failed: %v", err)
+			}
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- tx2.XLock(lockCtx, blk)
+			}()
+
+			select {
+			case err := <-done:
+				t.Fatalf("expected XLock to wait until unlock, got early result: %v", err)
+			case <-time.After(10 * time.Millisecond):
+				// still waiting as expected
+			}
+
+			tx1.Unlock(ctx, blk)
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("expected XLock to succeed after unlock, got %v", err)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected XLock to succeed after unlock")
+			}
+
+			tx2.Unlock(ctx, blk)
+		})
 	})
 
-	t.Run("XLock and Unlock", func(t *testing.T) {
-		ctx := context.Background()
-		locktbl := concurrency.NewLockTable()
-		fm, _, _, tx1 := initTx(t, locktbl, 9)
-		_, _, _, tx2 := initTx(t, locktbl, 10)
+	t.Run("XLock/Unlock", func(t *testing.T) {
+		t.Run("XLock保持中は他トランザクションのSLockがタイムアウトまで待機する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 11)
+			_, _, _, tx2 := initTx(t, locktbl, 12)
 
-		blk, err := fm.Append("testfile_lock_xlock")
-		if err != nil {
-			t.Fatalf("append block failed: %v", err)
-		}
+			blk, err := fm.Append("testfile_lock_xlock_block")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.XLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 XLock failed: %v", err)
+			}
 
-		// Acquire XLock with tx1
-		tx1.XLock(ctx, blk)
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- tx2.SLock(lockCtx, blk)
+			}()
 
-		// SLock on tx2 should block until timeout while XLock is held
-		tCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		start := time.Now()
-		tx2.SLock(tCtx, blk)
-		blocked := time.Since(start)
-		if blocked < 40*time.Millisecond {
-			t.Errorf("expected SLock to block ~50ms while XLock held, got %v", blocked)
-		}
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected timeout while tx1 holds XLock, got %v", err)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected SLock to return by context timeout")
+			}
 
-		// After Unlock by tx1, SLock on tx2 should succeed quickly
-		tx1.Unlock(ctx, blk)
-		start = time.Now()
-		tx2.SLock(context.Background(), blk)
-		elapsed := time.Since(start)
-		if elapsed > 200*time.Millisecond {
-			t.Errorf("expected SLock to succeed quickly after Unlock, took %v", elapsed)
-		}
+			tx1.Unlock(ctx, blk)
+		})
 
-		// Cleanup
-		tx2.Unlock(ctx, blk)
+		t.Run("XLockを解放すると他トランザクションのSLockが取得できる", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 13)
+			_, _, _, tx2 := initTx(t, locktbl, 14)
+
+			blk, err := fm.Append("testfile_lock_xlock_release")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.XLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 XLock failed: %v", err)
+			}
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- tx2.SLock(lockCtx, blk)
+			}()
+
+			select {
+			case err := <-done:
+				t.Fatalf("expected SLock to wait until unlock, got early result: %v", err)
+			case <-time.After(10 * time.Millisecond):
+				// still waiting as expected
+			}
+
+			tx1.Unlock(ctx, blk)
+
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("expected SLock to succeed after unlock, got %v", err)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected SLock to succeed after unlock")
+			}
+
+			tx2.Unlock(ctx, blk)
+		})
 	})
 
-	t.Run("SLock and XLock", func(t *testing.T) {
+	t.Run("SLock/XLock: 同一トランザクションでSLockからXLockへ昇格できる", func(t *testing.T) {
 		ctx := context.Background()
-		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 11)
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 15)
 
 		blk, err := fm.Append("testfile_lock_upgrade")
 		if err != nil {
 			t.Fatalf("append block failed: %v", err)
 		}
 
-		// Acquire SLock then upgrade to XLock in the same transaction
-		tx.SLock(ctx, blk)
-		start := time.Now()
-		tx.XLock(ctx, blk)
-		elapsed := time.Since(start)
-		if elapsed > 200*time.Millisecond {
-			t.Errorf("expected XLock upgrade to be quick, took %v", elapsed)
+		if err := tx.SLock(ctx, blk); err != nil {
+			t.Fatalf("SLock failed: %v", err)
+		}
+		upgradeCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if err := tx.XLock(upgradeCtx, blk); err != nil {
+			t.Fatalf("XLock upgrade failed: %v", err)
 		}
 
-		// Cleanup
 		tx.Unlock(ctx, blk)
 	})
 }
