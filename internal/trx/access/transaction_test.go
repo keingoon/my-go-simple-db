@@ -436,4 +436,208 @@ func TestTransaction(t *testing.T) {
 
 		tx.Unlock(ctx, blk)
 	})
+
+	t.Run("WithXLock", func(t *testing.T) {
+		t.Run("WithXLock: XLock取得後に関数を実行する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 16)
+			_, _, _, tx2 := initTx(t, locktbl, 17)
+
+			blk, err := fm.Append("testfile_withxlock_exec")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+
+			fnStarted := make(chan struct{}, 1)
+			fnRelease := make(chan struct{})
+			withXLockDone := make(chan error, 1)
+			go func() {
+				withXLockDone <- tx1.WithXLock(ctx, blk, func() error {
+					fnStarted <- struct{}{}
+					<-fnRelease
+					return nil
+				})
+			}()
+
+			<-fnStarted
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			err = tx2.SLock(lockCtx, blk)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while tx1 holds XLock in WithXLock, got %v", err)
+			}
+
+			close(fnRelease)
+			err = <-withXLockDone
+			if err != nil {
+				t.Fatalf("WithXLock failed: %v", err)
+			}
+
+			tx1.Unlock(ctx, blk)
+		})
+
+		t.Run("WithXLock: 関数が返したエラーをそのまま返す", func(t *testing.T) {
+			ctx := context.Background()
+			fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 18)
+
+			blk, err := fm.Append("testfile_withxlock_fnerr")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+
+			wantErr := errors.New("withxlock function error")
+			err = tx.WithXLock(ctx, blk, func() error {
+				return wantErr
+			})
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("expected error %v, got %v", wantErr, err)
+			}
+
+			tx.Unlock(ctx, blk)
+		})
+
+		t.Run("WithXLock: XLock取得に失敗した場合は関数を実行しない", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 19)
+			_, _, _, tx2 := initTx(t, locktbl, 20)
+
+			blk, err := fm.Append("testfile_withxlock_fail")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.XLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 XLock failed: %v", err)
+			}
+
+			called := false
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			err = tx2.WithXLock(lockCtx, blk, func() error {
+				called = true
+				return nil
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while tx1 holds XLock, got %v", err)
+			}
+			if called {
+				t.Fatal("expected function not to be called when WithXLock fails to acquire lock")
+			}
+
+			tx1.Unlock(ctx, blk)
+		})
+	})
+
+	t.Run("lockPolicy", func(t *testing.T) {
+		t.Run("LockStrict2PL: GetInt32後もSLockを保持する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 21)
+			_, _, _, tx2 := initTx(t, locktbl, 22)
+
+			blk, err := fm.Append("testfile_lockpolicy_strict")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			tx1.Pin(ctx, blk)
+
+			if _, err := tx1.GetInt32(ctx, blk, 0); err != nil {
+				t.Fatalf("tx1 GetInt32 failed: %v", err)
+			}
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			err = tx2.XLock(lockCtx, blk)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while Strict2PL holds SLock, got %v", err)
+			}
+
+			tx1.Unlock(ctx, blk)
+			tx1.Unpin(ctx, blk)
+		})
+
+		t.Run("LockReadCommitted: GetInt32後にSLockを解放する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 23)
+			_, _, _, tx2 := initTx(t, locktbl, 24)
+			tx1.lockPolicy = LockReadCommitted
+
+			blk, err := fm.Append("testfile_lockpolicy_rc_read")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			tx1.Pin(ctx, blk)
+
+			if _, err := tx1.GetInt32(ctx, blk, 0); err != nil {
+				t.Fatalf("tx1 GetInt32 failed: %v", err)
+			}
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if err := tx2.XLock(lockCtx, blk); err != nil {
+				t.Fatalf("expected XLock to succeed after ReadCommitted read, got %v", err)
+			}
+
+			tx2.Unlock(ctx, blk)
+			tx1.Unpin(ctx, blk)
+		})
+
+		t.Run("LockReadCommitted: SetInt32後はXLockを保持する", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, _, _, tx1 := initTx(t, locktbl, 25)
+			_, _, _, tx2 := initTx(t, locktbl, 26)
+			tx1.lockPolicy = LockReadCommitted
+
+			blk, err := fm.Append("testfile_lockpolicy_rc_write")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			tx1.Pin(ctx, blk)
+
+			logFn := func(buff *buffer.Buffer, offset int32, oldVal int32) (int32, error) {
+				return 1, nil
+			}
+			if err := tx1.SetInt32(ctx, blk, 0, 123, true, logFn); err != nil {
+				t.Fatalf("tx1 SetInt32 failed: %v", err)
+			}
+
+			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			err = tx2.SLock(lockCtx, blk)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while ReadCommitted write holds XLock, got %v", err)
+			}
+
+			tx1.Unlock(ctx, blk)
+			tx1.Unpin(ctx, blk)
+		})
+
+		t.Run("LockNoLock: SLockとXLockは競合中でも待機しない", func(t *testing.T) {
+			ctx := context.Background()
+			locktbl := concurrency.NewLockTable()
+			fm, lm, bm, tx1 := initTx(t, locktbl, 27)
+			txNoLock := NewRecoveryTransaction(locktbl, fm, lm, bm)
+
+			blk, err := fm.Append("testfile_lockpolicy_nolock")
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			if err := tx1.XLock(ctx, blk); err != nil {
+				t.Fatalf("tx1 XLock failed: %v", err)
+			}
+
+			if err := txNoLock.SLock(ctx, blk); err != nil {
+				t.Fatalf("expected LockNoLock SLock to be no-op, got %v", err)
+			}
+			if err := txNoLock.XLock(ctx, blk); err != nil {
+				t.Fatalf("expected LockNoLock XLock to be no-op, got %v", err)
+			}
+
+			tx1.Unlock(ctx, blk)
+		})
+	})
 }
