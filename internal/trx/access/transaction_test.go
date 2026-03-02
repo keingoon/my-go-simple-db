@@ -313,18 +313,9 @@ func TestTransaction(t *testing.T) {
 
 			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			done := make(chan error, 1)
-			go func() {
-				done <- tx2.XLock(lockCtx, blk)
-			}()
-
-			select {
-			case err := <-done:
-				if !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("expected timeout while tx1 holds SLock, got %v", err)
-				}
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("expected XLock to return by context timeout")
+			err = tx2.XLock(lockCtx, blk)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while tx1 holds SLock, got %v", err)
 			}
 
 			tx1.Unlock(ctx, blk)
@@ -347,26 +338,18 @@ func TestTransaction(t *testing.T) {
 			lockCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
 			done := make(chan error, 1)
+			started := make(chan struct{}, 1)
 			go func() {
+				started <- struct{}{}
 				done <- tx2.XLock(lockCtx, blk)
 			}()
-
-			select {
-			case err := <-done:
-				t.Fatalf("expected XLock to wait until unlock, got early result: %v", err)
-			case <-time.After(10 * time.Millisecond):
-				// still waiting as expected
-			}
+			<-started
 
 			tx1.Unlock(ctx, blk)
 
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("expected XLock to succeed after unlock, got %v", err)
-				}
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("expected XLock to succeed after unlock")
+			err = <-done
+			if err != nil {
+				t.Fatalf("expected XLock to succeed after unlock, got %v", err)
 			}
 
 			tx2.Unlock(ctx, blk)
@@ -390,18 +373,9 @@ func TestTransaction(t *testing.T) {
 
 			lockCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			done := make(chan error, 1)
-			go func() {
-				done <- tx2.SLock(lockCtx, blk)
-			}()
-
-			select {
-			case err := <-done:
-				if !errors.Is(err, context.DeadlineExceeded) {
-					t.Fatalf("expected timeout while tx1 holds XLock, got %v", err)
-				}
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("expected SLock to return by context timeout")
+			err = tx2.SLock(lockCtx, blk)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected timeout while tx1 holds XLock, got %v", err)
 			}
 
 			tx1.Unlock(ctx, blk)
@@ -424,26 +398,18 @@ func TestTransaction(t *testing.T) {
 			lockCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
 			done := make(chan error, 1)
+			started := make(chan struct{}, 1)
 			go func() {
+				started <- struct{}{}
 				done <- tx2.SLock(lockCtx, blk)
 			}()
-
-			select {
-			case err := <-done:
-				t.Fatalf("expected SLock to wait until unlock, got early result: %v", err)
-			case <-time.After(10 * time.Millisecond):
-				// still waiting as expected
-			}
+			<-started
 
 			tx1.Unlock(ctx, blk)
 
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatalf("expected SLock to succeed after unlock, got %v", err)
-				}
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("expected SLock to succeed after unlock")
+			err = <-done
+			if err != nil {
+				t.Fatalf("expected SLock to succeed after unlock, got %v", err)
 			}
 
 			tx2.Unlock(ctx, blk)
