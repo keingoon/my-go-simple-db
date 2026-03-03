@@ -93,3 +93,14 @@ func (dpt *DirtyPageTable) GetSnapshotTable() map[file.BlockId]DirtyPageEntry {
 	}
 	return snapshot
 }
+
+func (dpt *DirtyPageTable) ReplaceSnapshot(snapshot map[file.BlockId]DirtyPageEntry) {
+	dpt.mu.Lock()
+	defer dpt.mu.Unlock()
+
+	newTable := make(map[file.BlockId]DirtyPageEntry, len(snapshot))
+	for k, v := range snapshot {
+		newTable[k] = v
+	}
+	dpt.table = newTable
+}

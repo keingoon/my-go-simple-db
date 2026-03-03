@@ -188,4 +188,48 @@ func TestDirtyPageTable(t *testing.T) {
 			}
 		})
 	})
+
+	t.Run("DirtyPageTable: ReplaceSnapshot", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("snapshotの内容で全置換される", func(t *testing.T) {
+			t.Parallel()
+			dpt := NewDirtyPageTable()
+			oldBlk := file.NewBlockId("test", 1)
+			newBlk := file.NewBlockId("test", 2)
+			dpt.MarkDirty(oldBlk, 10)
+
+			snapshot := map[file.BlockId]DirtyPageEntry{
+				*newBlk: NewDirtyPageEntry(*newBlk, 20),
+			}
+			dpt.ReplaceSnapshot(snapshot)
+
+			if _, ok := dpt.GetPage(oldBlk); ok {
+				t.Fatalf("old block should be removed by ReplaceSnapshot")
+			}
+			entry, ok := dpt.GetPage(newBlk)
+			if !ok {
+				t.Fatalf("new block should exist after ReplaceSnapshot")
+			}
+			if got := entry.GetRecLSN(); got != 20 {
+				t.Fatalf("expected recLSN=20, got %d", got)
+			}
+		})
+
+		t.Run("引数snapshotを後で変更しても内部状態が変わらない", func(t *testing.T) {
+			t.Parallel()
+			dpt := NewDirtyPageTable()
+			blk := file.NewBlockId("test", 3)
+
+			snapshot := map[file.BlockId]DirtyPageEntry{
+				*blk: NewDirtyPageEntry(*blk, 30),
+			}
+			dpt.ReplaceSnapshot(snapshot)
+
+			delete(snapshot, *blk)
+			if _, ok := dpt.GetPage(blk); !ok {
+				t.Fatalf("internal table should not be affected by snapshot mutation")
+			}
+		})
+	})
 }

@@ -57,10 +57,8 @@ func NewRecoveryMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.Lo
 	return &RecoveryMgr{locktbl, fm, lm, bm, txAccess, txnum, atTbl, dptTbl}, nil
 }
 
-func NewRecoveryMgrForRecover(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) *RecoveryMgr {
+func NewRecoveryMgrForRecover(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, atTbl *ActiveTrxTable, dptTbl *buffer.DirtyPageTable) *RecoveryMgr {
 	txAccess := access.NewRecoveryTransaction(locktbl, fm, lm, bm)
-	atTbl := newActiveTrxTable()
-	dptTbl := buffer.NewDirtyPageTable()
 	return &RecoveryMgr{
 		locktbl:  locktbl,
 		fm:       fm,
@@ -162,6 +160,10 @@ func (rMgr *RecoveryMgr) Recover(ctx context.Context) error {
 	if err := rMgr.doUndoPhase(ctx, recovTxAccess, recovAtTbl); err != nil {
 		return fmt.Errorf("could not redo phase: %w", err)
 	}
+
+	// Reflect reconstructed recovery state to shared runtime ATT/DPT.
+	rMgr.atTbl.ReplaceSnapshot(recovAtTbl.getSnapshotTrxTable())
+	rMgr.dptTbl.ReplaceSnapshot(recovDptTbl.GetSnapshotTable())
 
 	return nil
 }

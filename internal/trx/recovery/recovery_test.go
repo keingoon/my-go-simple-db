@@ -87,7 +87,9 @@ func initRecoveryEnv(t *testing.T, txnum int32) (*file.FileMgr, *log.LogMgr, *bu
 func initRecoveryEnvForRecoverOnBase(t *testing.T, base *recoveryTestBase) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr, *access.Transaction, *RecoveryMgr, *ActiveTrxTable, *buffer.DirtyPageTable) {
 	t.Helper()
 	locktbl, fm, lm, bm := base.locktbl, base.fm, base.lm, base.bm
-	rm := NewRecoveryMgrForRecover(locktbl, fm, lm, bm)
+	atTbl := NewActiveTrxTable()
+	dptTbl := buffer.NewDirtyPageTable()
+	rm := NewRecoveryMgrForRecover(locktbl, fm, lm, bm, atTbl, dptTbl)
 
 	return fm, lm, bm, rm.txAccess, rm, rm.atTbl, rm.dptTbl
 }
@@ -398,7 +400,8 @@ func TestRecoveryMgr(t *testing.T) {
 		}
 		bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 
-		rm := NewRecoveryMgrForRecover(locktbl, fm, lm, bm)
+		atTbl := NewActiveTrxTable()
+		rm := NewRecoveryMgrForRecover(locktbl, fm, lm, bm, atTbl, dpt)
 		if rm == nil {
 			t.Fatal("RecoveryMgr が nil であるべきではない")
 		}
@@ -3552,5 +3555,44 @@ func TestRecoveryMgr(t *testing.T) {
 				}
 			})
 		})
+	})
+}
+
+func TestActiveTrxTable(t *testing.T) {
+	t.Run("ReplaceSnapshot: snapshotの内容で全置換される", func(t *testing.T) {
+		atTbl := newActiveTrxTable()
+		atTbl.setTrx(1, running, 10)
+
+		snapshot := map[int32]logrecord.CheckpointTxnEntry{
+			2: {Status: commited, LastLSN: 20},
+		}
+		atTbl.ReplaceSnapshot(snapshot)
+
+		if _, ok := atTbl.getTrx(1); ok {
+			t.Fatalf("old tx should be removed by ReplaceSnapshot")
+		}
+		entry, ok := atTbl.getTrx(2)
+		if !ok {
+			t.Fatalf("new tx should exist after ReplaceSnapshot")
+		}
+		if got := entry.getStatus(); got != commited {
+			t.Fatalf("expected status=%d, got %d", commited, got)
+		}
+		if got := entry.getLastLSN(); got != 20 {
+			t.Fatalf("expected lastLSN=20, got %d", got)
+		}
+	})
+
+	t.Run("ReplaceSnapshot: 引数snapshotを後で変更しても内部状態が変わらない", func(t *testing.T) {
+		atTbl := newActiveTrxTable()
+		snapshot := map[int32]logrecord.CheckpointTxnEntry{
+			3: {Status: running, LastLSN: 30},
+		}
+		atTbl.ReplaceSnapshot(snapshot)
+
+		delete(snapshot, 3)
+		if _, ok := atTbl.getTrx(3); !ok {
+			t.Fatalf("internal table should not be affected by snapshot mutation")
+		}
 	})
 }

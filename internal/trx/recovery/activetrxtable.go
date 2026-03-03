@@ -46,6 +46,10 @@ func newActiveTrxTable() *ActiveTrxTable {
 	}
 }
 
+func NewActiveTrxTable() *ActiveTrxTable {
+	return newActiveTrxTable()
+}
+
 func (at *ActiveTrxTable) getTable() []ActiveTrxTableEntry {
 	entries := make([]ActiveTrxTableEntry, 0)
 	for _, entry := range at.table {
@@ -103,7 +107,7 @@ func (at *ActiveTrxTable) getTrxsByStatus(status int32) ([]ActiveTrxTableEntry, 
 	for _, entry := range at.table {
 		if entry.status == status {
 			entries = append(entries, entry)
-}
+		}
 	}
 	return entries, len(entries) > 0
 }
@@ -128,4 +132,15 @@ func (at *ActiveTrxTable) getSnapshotTrxTable() map[int32]logrecord.CheckpointTx
 		}
 	}
 	return snapshot
+}
+
+func (at *ActiveTrxTable) ReplaceSnapshot(snapshot map[int32]logrecord.CheckpointTxnEntry) {
+	at.mu.Lock()
+	defer at.mu.Unlock()
+
+	newTable := make(map[int32]ActiveTrxTableEntry, len(snapshot))
+	for txnum, entry := range snapshot {
+		newTable[txnum] = newActiveTrxEntry(txnum, entry.Status, entry.LastLSN)
+	}
+	at.table = newTable
 }
