@@ -45,10 +45,10 @@ func NewTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log
 	return txmgr, nil
 }
 
-func NewRecoveryTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr) (*TransactionMgr, error) {
+func NewRecoveryTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr, lm *log.LogMgr, bm *buffer.BufferMgr, atTbl *recovery.ActiveTrxTable, dptTbl *buffer.DirtyPageTable) (*TransactionMgr, error) {
 	mybuffers := bufferlist.NewBufferList(bm)
 	txAccess := access.NewRecoveryTransaction(locktbl, fm, lm, bm)
-	recoveryMgr := recovery.NewRecoveryMgrForRecover(locktbl, fm, lm, bm)
+	recoveryMgr := recovery.NewRecoveryMgrForRecover(locktbl, fm, lm, bm, atTbl, dptTbl)
 	txmgr := &TransactionMgr{
 		recoveryMgr: recoveryMgr,
 		bm:          bm,
@@ -74,9 +74,12 @@ func (txmgr *TransactionMgr) Rollback(ctx context.Context) {
 	txmgr.mybuffers.UnpinAll(ctx)
 }
 
-func (txmgr *TransactionMgr) Recover(ctx context.Context) {
+func (txmgr *TransactionMgr) Recover(ctx context.Context) error {
 	txmgr.bm.FlushAll(ctx, txmgr.txnum)
-	txmgr.recoveryMgr.Recover(ctx)
+	if err := txmgr.recoveryMgr.Recover(ctx); err != nil {
+		return fmt.Errorf("could not recover: %w", err)
+	}
+	return nil
 }
 
 func (txmgr *TransactionMgr) Pin(ctx context.Context, blk *file.BlockId) {
