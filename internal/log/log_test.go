@@ -82,8 +82,9 @@ func TestLogMgr(t *testing.T) {
 			}
 		})
 		t.Run("ヘッダ: last checkpoint LSNが0である", func(t *testing.T) {
-			if got := hdr.GetInt32(headerLastCheckpointLSNOffset); got != 0 {
-				t.Fatalf("header last checkpoint LSNは%vであるべきだが%vだった", 0, got)
+			want := blocksize + int32Size
+			if got := hdr.GetInt32(headerLastCheckpointLSNOffset); got != want {
+				t.Fatalf("header last checkpoint LSNは%vであるべきだが%vだった", want, got)
 			}
 		})
 	})
@@ -439,7 +440,7 @@ func TestLogMgr(t *testing.T) {
 	})
 
 	// Master LSN tests
-	t.Run("MasterLSN: 初期値は0である", func(t *testing.T) {
+	t.Run("MasterLSN: 初期値はfirstLSNである", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -456,8 +457,9 @@ func TestLogMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if masterLsn != 0 {
-			t.Errorf("master LSNは%vであるべきだが%vだった", 0, masterLsn)
+		want := blocksize + int32Size
+		if masterLsn != want {
+			t.Errorf("master LSNは%vであるべきだが%vだった", want, masterLsn)
 		}
 	})
 

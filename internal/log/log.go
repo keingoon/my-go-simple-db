@@ -85,7 +85,8 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 		if err := hdr.SetInt32(headerPageSizeOffset, fm.BlockSize()); err != nil {
 			return nil, fmt.Errorf("could not write header page size: %w", err)
 		}
-		if err := hdr.SetInt32(headerLastCheckpointLSNOffset, 0); err != nil {
+		firstLSN := fm.BlockSize() + int32Size
+		if err := hdr.SetInt32(headerLastCheckpointLSNOffset, firstLSN); err != nil {
 			return nil, fmt.Errorf("could not write header last checkpoint lsn: %w", err)
 		}
 		if err := fm.Write(hdrBlk, hdr); err != nil {
