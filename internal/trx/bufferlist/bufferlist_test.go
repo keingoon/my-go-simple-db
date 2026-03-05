@@ -9,15 +9,20 @@ import (
 	"github.com/keingoon/simpledb/internal/log"
 )
 
-func initBufferList(t *testing.T) (*buffer.BufferMgr, *BufferList) {
-	const (
-		blocksize = int32(256)
-		logfile   = "logfile"
-		numbuffs  = 10
-		numwaits  = 10
-	)
+const (
+	blocksize = int32(256)
+	logfile   = "logfile"
+	numbuffs  = 10
+	numwaits  = 10
+)
 
-	fileMgr, err := file.NewFileMgr(t.TempDir(), blocksize)
+func initMgr(t *testing.T, dir string) (*file.FileMgr, *log.LogMgr, *buffer.BufferMgr, *buffer.DirtyPageTable) {
+	t.Helper()
+	if dir == "" {
+		dir = t.TempDir()
+	}
+
+	fileMgr, err := file.NewFileMgr(dir, blocksize)
 	if err != nil {
 		t.Fatalf("Failed to create FileMgr: %v", err)
 	}
@@ -27,49 +32,54 @@ func initBufferList(t *testing.T) (*buffer.BufferMgr, *BufferList) {
 		t.Fatalf("Failed to create LogMgr: %v", err)
 	}
 
-	bufferMgr := buffer.NewBufferMgr(fileMgr, logMgr, numbuffs, numwaits)
-	bufferList := NewBufferList(bufferMgr)
+	dpt := buffer.NewDirtyPageTable()
+	bufferMgr := buffer.NewBufferMgr(fileMgr, logMgr, numbuffs, numwaits, dpt)
+	return fileMgr, logMgr, bufferMgr, dpt
+}
 
-	return bufferMgr, bufferList
+type bufferListTestEnv struct {
+	fm  *file.FileMgr
+	lm  *log.LogMgr
+	bm  *buffer.BufferMgr
+	dpt *buffer.DirtyPageTable
+	bl  *BufferList
+}
+
+func newBufferListTestEnv(t *testing.T, dir string) *bufferListTestEnv {
+	t.Helper()
+	fm, lm, bm, dpt := initMgr(t, dir)
+	return &bufferListTestEnv{
+		fm:  fm,
+		lm:  lm,
+		bm:  bm,
+		dpt: dpt,
+		bl:  NewBufferList(bm),
+	}
 }
 
 func TestBufferList(t *testing.T) {
 	t.Parallel()
 
-	t.Run("NewBufferList", func(t *testing.T) {
+	t.Run("NewBufferList: 生成直後は未Pinブロックに対してGetBufferがnilを返す", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		blk := file.NewBlockId("testfile", 0)
 
 		if bl == nil {
 			t.Fatal("NewBufferList returned nil")
 		}
-
-		if bl.bm == nil {
-			t.Error("BufferMgr not set correctly")
-		}
-
-		if bl.buffers == nil {
-			t.Error("buffers map not initialized")
-		}
-
-		if bl.pins == nil {
-			t.Error("pins slice not initialized")
-		}
-
-		if len(bl.buffers) != 0 {
-			t.Error("buffers map should be empty initially")
-		}
-
-		if len(bl.pins) != 0 {
-			t.Error("pins slice should be empty initially")
+		if bl.GetBuffer(blk) != nil {
+			t.Fatal("expected nil for unpinned block")
 		}
 	})
 
-	t.Run("GetBuffer for non-existent block", func(t *testing.T) {
+	t.Run("GetBuffer: 未Pinブロックを指定するとnilを返す", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
 		blk := file.NewBlockId("testfile", 0)
 
 		buff := bl.GetBuffer(blk)
@@ -78,10 +88,11 @@ func TestBufferList(t *testing.T) {
 		}
 	})
 
-	t.Run("GetBuffer for pinned block", func(t *testing.T) {
+	t.Run("Pin: 未PinブロックをPinするとGetBufferで同じブロックのバッファを取得できる", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -100,71 +111,56 @@ func TestBufferList(t *testing.T) {
 		}
 	})
 
-	t.Run("Pin single block", func(t *testing.T) {
+	t.Run("Pin: 未PinブロックをPinすると利用可能バッファ数が1減る", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		bm := env.bm
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
+		before := bm.Available()
 
 		err := bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
 
-		// Verify block is in buffers map
-		buff := bl.buffers[blk]
-		if buff == nil {
-			t.Error("Buffer should not be nil")
-		}
-
-		// Verify block is in pins slice
-		found := false
-		for _, pinnedBlk := range bl.pins {
-			if pinnedBlk == blk {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Error("Block should be in pins slice after pinning")
+		if bm.Available() != before-1 {
+			t.Fatalf("expected available %d, got %d", before-1, bm.Available())
 		}
 	})
 
-	t.Run("Pin same block multiple times", func(t *testing.T) {
+	t.Run("Pin: 同一ブロックを重ねてPinしても利用可能バッファ数は追加で減らない", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		bm := env.bm
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
 
-		// Pin the same block twice
 		err := bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
+		afterFirstPin := bm.Available()
 
 		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin same block again: %v", err)
 		}
 
-		// Should have two entries in pins slice for the same block
-		count := 0
-		for _, pinnedBlk := range bl.pins {
-			if pinnedBlk == blk {
-				count++
-			}
-		}
-		if count != 2 {
-			t.Errorf("Expected 2 pins for same block, got %d", count)
+		if bm.Available() != afterFirstPin {
+			t.Fatalf("expected available %d, got %d", afterFirstPin, bm.Available())
 		}
 	})
 
-	t.Run("Unpin single pin", func(t *testing.T) {
+	t.Run("Unpin: 1回PinしたブロックをUnpinするとGetBufferがnilになる", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -174,30 +170,18 @@ func TestBufferList(t *testing.T) {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
 
-		// Unpin once
 		bl.Unpin(ctx, blk)
 
-		// Should have no pins
-		count := 0
-		for _, pinnedBlk := range bl.pins {
-			if pinnedBlk == blk {
-				count++
-			}
-		}
-		if count != 0 {
-			t.Errorf("Expected 0 pins after unpin, got %d", count)
-		}
-
-		// Buffer should be removed
-		if _, exists := bl.buffers[blk]; exists {
-			t.Error("Buffer should be removed after unpin")
+		if bl.GetBuffer(blk) != nil {
+			t.Fatal("expected nil after unpin")
 		}
 	})
 
-	t.Run("Unpin multiple pins", func(t *testing.T) {
+	t.Run("Unpin: 同一ブロックを2回Pin後に1回UnpinしてもGetBufferで取得できる", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
 
@@ -212,35 +196,45 @@ func TestBufferList(t *testing.T) {
 			t.Fatalf("Failed to pin block again: %v", err)
 		}
 
-		// Unpin once
-		bl.Unpin(ctx, blk)
-		// Unpin again
 		bl.Unpin(ctx, blk)
 
-		// Should have no pins
-		count := 0
-		for _, pinnedBlk := range bl.pins {
-			if pinnedBlk == blk {
-				count++
-			}
-		}
-		if count != 0 {
-			t.Errorf("Expected 0 pins after second unpin, got %d", count)
-		}
-
-		// Buffer should be removed
-		if _, exists := bl.buffers[blk]; exists {
-			t.Error("Buffer should be removed after all unpins")
+		if bl.GetBuffer(blk) == nil {
+			t.Fatal("expected buffer to remain after first unpin")
 		}
 	})
 
-	t.Run("UnpinAll with multiple blocks", func(t *testing.T) {
+	t.Run("Unpin: 同一ブロックを2回Pin後に2回UnpinするとGetBufferがnilになる", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		ctx := context.Background()
+		blk := file.NewBlockId("testfile", 0)
+
+		err := bl.Pin(ctx, blk)
+		if err != nil {
+			t.Fatalf("Failed to pin block: %v", err)
+		}
+		err = bl.Pin(ctx, blk)
+		if err != nil {
+			t.Fatalf("Failed to pin block again: %v", err)
+		}
+
+		bl.Unpin(ctx, blk)
+		bl.Unpin(ctx, blk)
+
+		if bl.GetBuffer(blk) != nil {
+			t.Fatal("expected nil after second unpin")
+		}
+	})
+
+	t.Run("UnpinAll: 複数ブロックをPin中に呼ぶと全ブロックでGetBufferがnilになる", func(t *testing.T) {
+		t.Parallel()
+
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
 		ctx := context.Background()
 
-		// Pin multiple blocks
 		blk1 := file.NewBlockId("testfile1", 0)
 		blk2 := file.NewBlockId("testfile1", 1)
 		blk3 := file.NewBlockId("testfile2", 0)
@@ -260,27 +254,23 @@ func TestBufferList(t *testing.T) {
 			t.Fatalf("Failed to pin testfile2 block3: %v", err)
 		}
 
-		// Unpin all
 		bl.UnpinAll(ctx)
 
-		// Verify all pins and buffers are cleared
-		if len(bl.pins) != 0 {
-			t.Errorf("Expected 0 pins after UnpinAll, got %d", len(bl.pins))
-		}
-
-		if len(bl.buffers) != 0 {
-			t.Errorf("Expected 0 buffers after UnpinAll, got %d", len(bl.buffers))
+		if bl.GetBuffer(blk1) != nil || bl.GetBuffer(blk2) != nil || bl.GetBuffer(blk3) != nil {
+			t.Fatal("expected all buffers to be nil after UnpinAll")
 		}
 	})
 
-	t.Run("UnpinAll with multiple pins on same block", func(t *testing.T) {
+	t.Run("UnpinAll: 同一ブロックを複数回Pin中に呼ぶと利用可能バッファ数が元に戻る", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		bm := env.bm
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
+		before := bm.Available()
 
-		// Pin the same block multiple times
 		err := bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
@@ -296,37 +286,33 @@ func TestBufferList(t *testing.T) {
 			t.Fatalf("Failed to pin block third time: %v", err)
 		}
 
-		// Unpin all
 		bl.UnpinAll(ctx)
 
-		// Verify all pins and buffers are cleared
-		if len(bl.pins) != 0 {
-			t.Errorf("Expected 0 pins after UnpinAll, got %d", len(bl.pins))
+		if bm.Available() != before {
+			t.Fatalf("expected available %d, got %d", before, bm.Available())
 		}
-
-		if len(bl.buffers) != 0 {
-			t.Errorf("Expected 0 buffers after UnpinAll, got %d", len(bl.buffers))
+		if bl.GetBuffer(blk) != nil {
+			t.Fatal("expected nil after UnpinAll")
 		}
 	})
 
-	t.Run("Unpin non-existent block", func(t *testing.T) {
+	t.Run("Unpin: 未Pinブロックを指定しても利用可能バッファ数は変化しない", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		bm := env.bm
 		ctx := context.Background()
 		blk := file.NewBlockId("testfile", 0)
+		before := bm.Available()
 
-		// Unpin a block that was never pinned
-		// This should not panic or cause errors
 		bl.Unpin(ctx, blk)
 
-		// Verify state is still clean
-		if len(bl.pins) != 0 {
-			t.Errorf("Expected 0 pins, got %d", len(bl.pins))
+		if bm.Available() != before {
+			t.Fatalf("expected available %d, got %d", before, bm.Available())
 		}
-
-		if len(bl.buffers) != 0 {
-			t.Errorf("Expected 0 buffers, got %d", len(bl.buffers))
+		if bl.GetBuffer(blk) != nil {
+			t.Fatal("expected nil for unpinned block")
 		}
 	})
 }
@@ -334,54 +320,51 @@ func TestBufferList(t *testing.T) {
 func TestBufferListConcurrency(t *testing.T) {
 	t.Parallel()
 
-	t.Run("Concurrent pin and unpin operations", func(t *testing.T) {
+	t.Run("Pin/Unpin: 異なるブロックで並行実行しても最終的に利用可能バッファ数が元に戻る", func(t *testing.T) {
 		t.Parallel()
 
-		_, bl := initBufferList(t)
+		env := newBufferListTestEnv(t, "")
+		bl := env.bl
+		bm := env.bm
 		ctx := context.Background()
+		before := bm.Available()
+		blk1 := file.NewBlockId("testfile1", 0)
+		blk2 := file.NewBlockId("testfile2", 0)
 
-		// Test concurrent pinning and unpinning
 		done := make(chan bool, 2)
 
-		// Goroutine 1: Pin and unpin block1
 		go func() {
 			defer func() { done <- true }()
-			blk := file.NewBlockId("testfile1", 0)
 			for i := 0; i < 10; i++ {
-				err := bl.Pin(ctx, blk)
+				err := bl.Pin(ctx, blk1)
 				if err != nil {
 					t.Errorf("Failed to pin in goroutine 1: %v", err)
 					return
 				}
-				bl.Unpin(ctx, blk)
+				bl.Unpin(ctx, blk1)
 			}
 		}()
 
-		// Goroutine 2: Pin and unpin block2
 		go func() {
 			defer func() { done <- true }()
-			blk := file.NewBlockId("testfile2", 0)
 			for i := 0; i < 10; i++ {
-				err := bl.Pin(ctx, blk)
+				err := bl.Pin(ctx, blk2)
 				if err != nil {
 					t.Errorf("Failed to pin in goroutine 2: %v", err)
 					return
 				}
-				bl.Unpin(ctx, blk)
+				bl.Unpin(ctx, blk2)
 			}
 		}()
 
-		// Wait for both goroutines to complete
 		<-done
 		<-done
 
-		// Verify final state is clean
-		if len(bl.pins) != 0 {
-			t.Errorf("Expected 0 pins after concurrent operations, got %d", len(bl.pins))
+		if bm.Available() != before {
+			t.Fatalf("expected available %d, got %d", before, bm.Available())
 		}
-
-		if len(bl.buffers) != 0 {
-			t.Errorf("Expected 0 buffers after concurrent operations, got %d", len(bl.buffers))
+		if bl.GetBuffer(blk1) != nil || bl.GetBuffer(blk2) != nil {
+			t.Fatal("expected nil buffers after concurrent operations")
 		}
 	})
 }
