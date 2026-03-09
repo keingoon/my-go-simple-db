@@ -12,6 +12,18 @@ const (
 	int16Size = 2
 )
 
+// 物理レコードのペイロード共通ヘッダ:
+// [recType:int32][payload...]
+//
+// - recTypeNormal: 通常ログレコード（payloadは呼び出し側が定義）
+// - recTypeFragment: フラグメント（payloadは flags/totalLen/payload を含む）
+const (
+	recTypeSize     int32 = int32Size
+	recTypeOffset   int32 = 0
+	recTypeNormal   int32 = 1
+	recTypeFragment int32 = 2
+)
+
 // ログファイルヘッダー (ブロック0) のレイアウト:
 // magic(4) | version(2) | pageSize(4) | lastCheckpointLSN(4) | reserved(...)
 const (
@@ -28,17 +40,15 @@ const (
 )
 
 // 1つの物理レコード内に格納するフラグメントのレイアウト:
-// FIRST: fragMagic(4) | flags(4) | totalLen(4) | payload
-// CONT:  fragMagic(4) | flags(4) | payload
-// LAST:  fragMagic(4) | flags(4) | payload
+// FIRST: recType(4) | flags(4) | totalLen(4) | payload
+// CONT:  recType(4) | flags(4) | payload
+// LAST:  recType(4) | flags(4) | payload
 const (
-	fragMagic int32 = 0x47415246 // "FRAG"（リトルエンディアン）
 	fragFirst int32 = 1
 	fragCont  int32 = 2
 	fragLast  int32 = 3
 
-	fragMagicOffset         int32 = 0
-	fragFlagsOffset         int32 = int32Size
+	fragFlagsOffset         int32 = recTypeSize
 	fragFirstTotalLenOffset int32 = fragFlagsOffset + int32Size
 	fragFirstPayloadOffset  int32 = fragFirstTotalLenOffset + int32Size
 	fragPayloadOffset       int32 = fragFlagsOffset + int32Size
@@ -168,12 +178,19 @@ func (logMgr *LogMgr) ReadRecordAt(lsn int32) ([]byte, error) {
 // レコードが単一ブロックに収まるか判定する
 func (logMgr *LogMgr) canFitAsSingle(logrec []byte) bool {
 	maxBytesInEmptyBlock := int(logMgr.fm.BlockSize()) - 2*int(int32Size)
-	return len(logrec) <= maxBytesInEmptyBlock
+	// 物理レコードのpayload先頭にrecTypeが入る分を考慮する
+	return recTypeSize+int32(len(logrec)) <= int32(maxBytesInEmptyBlock)
 }
 
 // 単一レコードとして書き込む
 func (logMgr *LogMgr) writeSingleRecord(logrec []byte) (int32, error) {
-	if err := logMgr.ensureAndWrite(logrec); err != nil {
+	// ディスク上は [recType:int32][payload...] として保存する
+	rec := make([]byte, int(recTypeSize)+len(logrec))
+	p := file.NewLogPage(rec)
+	p.SetInt32(recTypeOffset, recTypeNormal)
+	copy(rec[int(recTypeSize):], logrec)
+
+	if err := logMgr.ensureAndWrite(rec); err != nil {
 		return 0, fmt.Errorf("could not append logrec: %w", err)
 	}
 	return logMgr.latestLSN, nil
@@ -238,7 +255,7 @@ func (logMgr *LogMgr) buildFragment(chunk []byte, totalLen int, first bool, isLa
 
 	frag := make([]byte, int(headerLen)+len(chunk))
 	fp := file.NewLogPage(frag)
-	fp.SetInt32(0, fragMagic)
+	fp.SetInt32(recTypeOffset, recTypeFragment)
 
 	if first {
 		fp.SetInt32(fragFlagsOffset, fragFirst)
@@ -377,7 +394,14 @@ func (logIter *LogIterator) Next() (int32, []byte) {
 
 		// フラグメントかどうか判定
 		if !logIter.isFragment(rec) {
-			// 非フラグメントのペイロード
+			// 非フラグメントのペイロード（共通ヘッダを剥がして返す）
+			if len(rec) >= int(recTypeSize) {
+				pr := file.NewLogPage(rec)
+				if pr.GetInt32(recTypeOffset) == recTypeNormal {
+					return currentLSN, rec[int(recTypeSize):]
+				}
+			}
+			// 想定外（壊れている等）の場合は生のペイロードを返す
 			return currentLSN, rec
 		}
 
@@ -479,27 +503,32 @@ func (logIter *LogIterator) ensureCurrentBlock() {
 
 // isFragment はレコードがフラグメントかどうかを判定する
 func (logIter *LogIterator) isFragment(rec []byte) bool {
-	if len(rec) < int(fragPayloadOffset) {
+	if len(rec) < int(recTypeSize) {
 		return false
 	}
 	pr := file.NewLogPage(rec)
-	return pr.GetInt32(0) == fragMagic
+	if pr.GetInt32(recTypeOffset) != recTypeFragment {
+		return false
+	}
+	// flags領域を読むための最小長
+	return len(rec) >= int(fragPayloadOffset)
 }
 
 // フラグメントレコードのフラグを取得する
 func (logIter *LogIterator) getFragmentFlags(rec []byte) int32 {
 	pr := file.NewLogPage(rec)
-	return pr.GetInt32(int32Size)
+	return pr.GetInt32(fragFlagsOffset)
 }
 
 // FIRST フラグメントのヘッダを検証し、totalLen を返す
 // 戻り値: (totalLen, 検証成功したか)
 func (logIter *LogIterator) validateFragmentHeader(rec []byte) (int32, bool) {
-	if len(rec) < int32Size*3 {
+	// recType(4) | flags(4) | totalLen(4)
+	if len(rec) < int(recTypeSize+int32Size*2) {
 		return 0, false
 	}
 	pr := file.NewLogPage(rec)
-	totalLen := pr.GetInt32(int32Size * 2)
+	totalLen := pr.GetInt32(fragFirstTotalLenOffset)
 	if totalLen <= 0 {
 		return 0, false
 	}

@@ -212,9 +212,16 @@ func TestLogMgr(t *testing.T) {
 		})
 
 		t.Run("メモリ上のlogpageにレコードが書き込まれる", func(t *testing.T) {
-			recGeted := logMgr.logpage.GetBytes(startBoundary)
-			if !bytes.Equal(rec, recGeted) {
-				t.Fatalf("logpageのレコードが一致しない")
+			raw := logMgr.logpage.GetBytes(startBoundary)
+			if len(raw) < int(recTypeSize) {
+				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
+			}
+			p := file.NewLogPage(raw)
+			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+			}
+			if !bytes.Equal(rec, raw[int(recTypeSize):]) {
+				t.Fatalf("logpageのレコード(payload)が一致しない")
 			}
 		})
 	})
@@ -246,7 +253,8 @@ func TestLogMgr(t *testing.T) {
 			latestRec = rec
 		}
 
-		bytesPerRec := int32Size + recLen
+		// 物理レコード: [len:int32][recType:int32][payload...]
+		bytesPerRec := int32Size + recTypeSize + recLen
 		freeBytes := blocksize - int32Size
 
 		firstBlkRecCnt := freeBytes / bytesPerRec
@@ -269,10 +277,16 @@ func TestLogMgr(t *testing.T) {
 		})
 
 		t.Run("メモリ上のlogpageに最後のレコードが書き込まれる", func(t *testing.T) {
-			recpos := logMgr.logpage.GetInt32(0)
-			recGeted := logMgr.logpage.GetBytes(recpos)
-			if !bytes.Equal(latestRec, recGeted) {
-				t.Fatalf("最後のレコードが一致しない")
+			raw := logMgr.logpage.GetBytes(secondBlkLastRecOffset)
+			if len(raw) < int(recTypeSize) {
+				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
+			}
+			p := file.NewLogPage(raw)
+			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+			}
+			if !bytes.Equal(latestRec, raw[int(recTypeSize):]) {
+				t.Fatalf("最後のレコード(payload)が一致しない")
 			}
 		})
 
@@ -362,8 +376,15 @@ func TestLogMgr(t *testing.T) {
 		recGeted := logpage.GetBytes(startBoundary)
 
 		t.Run("ディスク上のレコードが一致する", func(t *testing.T) {
-			if !bytes.Equal(rec, recGeted) {
-				t.Fatalf("ディスク上のレコードが一致しない")
+			if len(recGeted) < int(recTypeSize) {
+				t.Fatalf("ディスク上のrawレコードが短すぎる: len=%d", len(recGeted))
+			}
+			p := file.NewLogPage(recGeted)
+			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+			}
+			if !bytes.Equal(rec, recGeted[int(recTypeSize):]) {
+				t.Fatalf("ディスク上のレコード(payload)が一致しない")
 			}
 		})
 
@@ -683,7 +704,8 @@ func TestLogIterator(t *testing.T) {
 		// Append 20 log rec
 		for i := 0; i < recCount; i++ {
 			rec := createLogRec(int32(i+1), logrecord)
-			bytesPerRec = int32Size + int32(len(rec))
+			// 物理レコード: [len:int32][recType:int32][payload...]
+			bytesPerRec = int32Size + recTypeSize + int32(len(rec))
 			if _, err := logMgr.Append(rec); err != nil {
 				t.Fatal(err)
 			}
@@ -708,8 +730,15 @@ func TestLogIterator(t *testing.T) {
 		})
 
 		t.Run("指定offsetから最初のレコードが読める", func(t *testing.T) {
-			recFirst := p.GetBytes(int32Size)
-			if !bytes.Equal(recFirst, recFirstExpected) {
+			raw := p.GetBytes(int32Size)
+			if len(raw) < int(recTypeSize) {
+				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
+			}
+			pr := file.NewLogPage(raw)
+			if got := pr.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+			}
+			if !bytes.Equal(raw[int(recTypeSize):], recFirstExpected) {
 				t.Fatalf("moveToBlock後の最初のレコードが期待と一致しない")
 			}
 		})
@@ -905,7 +934,8 @@ func TestFragmentRecord(t *testing.T) {
 		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
 		lsn1, gotRec1 := iter.Next()
 		lsn2, gotLarge1 := iter.Next()
-		rec1BytesNeeded := int32Size + int32(len(rec1))
+		// rec1は単一レコードとして保存されるため、物理サイズはtype分だけ増える
+		rec1BytesNeeded := int32Size + recTypeSize + int32(len(rec1))
 		largeRec1lsn := startLSN + rec1BytesNeeded
 		lsn3, gotRec2 := iter.Next()
 		readBackRec2, err := logMgr.ReadRecordAt(lsn3)
@@ -998,12 +1028,14 @@ func TestFragmentRecord(t *testing.T) {
 				t.Fatalf("レコードが一致しない")
 			}
 		})
-		t.Run("フラグメントとして扱われない", func(t *testing.T) {
-			if len(reconstructed) >= int(fragPayloadOffset) {
-				p := file.NewLogPage(reconstructed)
-				if p.GetInt32(0) == fragMagic {
-					t.Fatalf("フラグメントとして扱われてしまった")
-				}
+		t.Run("ディスク上のtypeがnormalである", func(t *testing.T) {
+			raw := logMgr.logpage.GetBytes(startBoundary)
+			if len(raw) < int(recTypeSize) {
+				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
+			}
+			p := file.NewLogPage(raw)
+			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
 			}
 		})
 	})
