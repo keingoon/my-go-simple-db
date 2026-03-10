@@ -757,6 +757,56 @@ func TestFragmentRecord(t *testing.T) {
 		return rec
 	}
 
+	t.Run("正常形: 単一ブロックに収まるレコードは非フラグメントとして扱われる", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize     = int32(256)
+			logfile       = "logfile"
+			startBoundary = int32Size
+			startLSN      = int32(blocksize + startBoundary)
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 単一ブロックに収まるレコード
+		smallRec := createLogRec(1, "small")
+		if _, err := logMgr.Append(smallRec); err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.Flush(logMgr.latestLSN)
+
+		iter, err := logMgr.Iterater(startLSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lsn, reconstructed := iter.Next()
+		t.Run("LSNがstartLSNである", func(t *testing.T) {
+			if lsn != startLSN {
+				t.Fatalf("LSNは%vであるべきだが%vだった", startLSN, lsn)
+			}
+		})
+		t.Run("レコードが元と一致する", func(t *testing.T) {
+			if !bytes.Equal(smallRec, reconstructed) {
+				t.Fatalf("レコードが一致しない")
+			}
+		})
+		t.Run("ディスク上のtypeがnormalである", func(t *testing.T) {
+			raw := logMgr.logpage.GetBytes(startBoundary)
+			if len(raw) < int(recTypeSize) {
+				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
+			}
+			p := file.NewLogPage(raw)
+			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
+				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+			}
+		})
+	})
+
 	t.Run("正常形: first->cont->last が正しく復元できる", func(t *testing.T) {
 		t.Parallel()
 
@@ -796,6 +846,113 @@ func TestFragmentRecord(t *testing.T) {
 		t.Run("復元されたレコードが元と一致する", func(t *testing.T) {
 			if !bytes.Equal(largeRec, reconstructed) {
 				t.Fatalf("復元されたレコードが一致しない")
+			}
+		})
+	})
+
+	t.Run("正常形: 通常レコードとフラグメントレコードが混在しても追加順に読める", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize     = int32(256)
+			logfile       = "logfile"
+			startBoundary = int32Size
+			startLSN      = int32(blocksize + startBoundary)
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 通常レコード
+		rec1 := createLogRec(1, "normal1")
+		if _, err := logMgr.Append(rec1); err != nil {
+			t.Fatal(err)
+		}
+
+		// 大きなレコード1
+		largeRec1 := createLargeLogRec(int(blocksize) + 100)
+		if _, err := logMgr.Append(largeRec1); err != nil {
+			t.Fatal(err)
+		}
+
+		// 通常レコード
+		rec2 := createLogRec(2, "normal2")
+		if _, err := logMgr.Append(rec2); err != nil {
+			t.Fatal(err)
+		}
+
+		// 大きなレコード2
+		largeRec2 := createLargeLogRec(int(blocksize) + 200)
+		if _, err := logMgr.Append(largeRec2); err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.Flush(logMgr.latestLSN)
+
+		// 通常レコード・フラグメントレコードが混在していても、
+		// Iterator が追加順に論理レコードを返すことを確認する。
+		iter, err := logMgr.Iterater(startLSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
+		lsn1, gotRec1 := iter.Next()
+		lsn2, gotLarge1 := iter.Next()
+		// rec1は単一レコードとして保存されるため、物理サイズはtype分だけ増える
+		rec1BytesNeeded := int32Size + recTypeSize + int32(len(rec1))
+		largeRec1lsn := startLSN + rec1BytesNeeded
+		lsn3, gotRec2 := iter.Next()
+		readBackRec2, err := logMgr.ReadRecordAt(lsn3)
+		if err != nil {
+			t.Fatalf("ReadRecordAt(rec2 lsn=%d)が失敗した: %v", lsn3, err)
+		}
+		lsn4, gotLarge2 := iter.Next()
+		readBackLarge2, err := logMgr.ReadRecordAt(lsn4)
+		if err != nil {
+			t.Fatalf("ReadRecordAt(largeRec2 lsn=%d)が失敗した: %v", lsn4, err)
+		}
+
+		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
+			if lsn1 != startLSN {
+				t.Fatalf("1件目のLSNは%vであるべきだが%vだった", startLSN, lsn1)
+			}
+		})
+		t.Run("1件目: レコードがrec1である", func(t *testing.T) {
+			if !bytes.Equal(rec1, gotRec1) {
+				t.Fatalf("1件目のレコードがrec1と一致しない")
+			}
+		})
+		t.Run("2件目: 大きいレコードlargeRec1のLSNが先頭の通常レコード直後である", func(t *testing.T) {
+			if lsn2 != largeRec1lsn {
+				t.Fatalf("2件目のLSNは%vであるべきだが%vだった", largeRec1lsn, lsn2)
+			}
+		})
+		t.Run("2件目: フラグメント化されたlargeRec1が1件の論理レコードとして復元される", func(t *testing.T) {
+			if !bytes.Equal(largeRec1, gotLarge1) {
+				t.Fatalf("2件目のレコードがlargeRec1と一致しない")
+			}
+		})
+		t.Run("3件目: largeRec1の次に通常レコードrec2が返る", func(t *testing.T) {
+			if !bytes.Equal(rec2, gotRec2) {
+				t.Fatalf("3件目のレコードがrec2と一致しない")
+			}
+		})
+		t.Run("3件目: 返ってきたLSNでReadRecordAtしてもrec2が取れる", func(t *testing.T) {
+			if !bytes.Equal(rec2, readBackRec2) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn3)
+			}
+		})
+		t.Run("4件目: 次の大きいレコードlargeRec2も1件の論理レコードとして復元される", func(t *testing.T) {
+			if !bytes.Equal(largeRec2, gotLarge2) {
+				t.Fatalf("4件目のレコードがlargeRec2と一致しない")
+			}
+		})
+		t.Run("4件目: 返ってきたLSNでReadRecordAtしてもlargeRec2が取れる", func(t *testing.T) {
+			if !bytes.Equal(largeRec2, readBackLarge2) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でlargeRec2が取れない", lsn4)
 			}
 		})
 	})
@@ -879,84 +1036,6 @@ func TestFragmentRecord(t *testing.T) {
 			}
 		})
 		t.Run("3件目: 壊れたフラグメントチェインは独立した論理レコードとして返らない", func(t *testing.T) {
-			if iter.HasNext() {
-				t.Fatalf("3件目のレコードがこれ以上無いはずだがある")
-			}
-		})
-	})
-
-	t.Run("異常形: 壊れた通常レコードはスキップされる", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize     = int32(256)
-			logfile       = "logfile"
-			startBoundary = int32Size
-			startLSN      = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		rec1 := createLogRec(1, "normal1")
-		if _, err := logMgr.Append(rec1); err != nil {
-			t.Fatal(err)
-		}
-
-		corruptRec := make([]byte, recTypeSize+4)
-		p := file.NewLogPage(corruptRec)
-		if err := p.SetInt32(recTypeOffset, 99); err != nil {
-			t.Fatalf("壊れた通常レコードのtype書き込みに失敗した: %v", err)
-		}
-		if err := p.SetInt32(recTypeSize, 12345); err != nil {
-			t.Fatalf("壊れた通常レコードのpayload書き込みに失敗した: %v", err)
-		}
-		if err := logMgr.ensureAndWrite(corruptRec); err != nil {
-			t.Fatalf("壊れた通常レコードの挿入に失敗した: %v", err)
-		}
-
-		rec2 := createLogRec(2, "normal2")
-		if _, err := logMgr.Append(rec2); err != nil {
-			t.Fatal(err)
-		}
-
-		logMgr.Flush(logMgr.latestLSN)
-
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		lsn1, got1 := iter.Next()
-		lsn2, got2 := iter.Next()
-		got, err := logMgr.ReadRecordAt(lsn2)
-		if err != nil {
-			t.Fatalf("ReadRecordAt(lsn=%d)が失敗した: %v", lsn2, err)
-		}
-
-		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
-			if lsn1 != startLSN {
-				t.Fatalf("1件目のLSNは%vであるべきだが%vだった", startLSN, lsn1)
-			}
-		})
-		t.Run("1件目: レコードがrec1である", func(t *testing.T) {
-			if !bytes.Equal(rec1, got1) {
-				t.Fatalf("1件目のレコードがrec1と一致しない")
-			}
-		})
-		t.Run("2件目: レコードがrec2である", func(t *testing.T) {
-			if !bytes.Equal(rec2, got2) {
-				t.Fatalf("2件目のレコードがrec2と一致しない")
-			}
-		})
-		t.Run("2件目: 返ってきたLSNでReadRecordAtするとrec2が取れる", func(t *testing.T) {
-			if !bytes.Equal(rec2, got) {
-				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn2)
-			}
-		})
-		t.Run("3件目: レコードがこれ以上無い", func(t *testing.T) {
 			if iter.HasNext() {
 				t.Fatalf("3件目のレコードがこれ以上無いはずだがある")
 			}
@@ -1197,7 +1276,7 @@ func TestFragmentRecord(t *testing.T) {
 		})
 	})
 
-	t.Run("正常形: 通常レコードとフラグメントレコードが混在しても追加順に読める", func(t *testing.T) {
+	t.Run("異常形: 壊れた通常レコードはスキップされる", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -1212,54 +1291,40 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 通常レコード
 		rec1 := createLogRec(1, "normal1")
 		if _, err := logMgr.Append(rec1); err != nil {
 			t.Fatal(err)
 		}
 
-		// 大きなレコード1
-		largeRec1 := createLargeLogRec(int(blocksize) + 100)
-		if _, err := logMgr.Append(largeRec1); err != nil {
-			t.Fatal(err)
+		corruptRec := make([]byte, recTypeSize+4)
+		p := file.NewLogPage(corruptRec)
+		if err := p.SetInt32(recTypeOffset, 99); err != nil {
+			t.Fatalf("壊れた通常レコードのtype書き込みに失敗した: %v", err)
+		}
+		if err := p.SetInt32(recTypeSize, 12345); err != nil {
+			t.Fatalf("壊れた通常レコードのpayload書き込みに失敗した: %v", err)
+		}
+		if err := logMgr.ensureAndWrite(corruptRec); err != nil {
+			t.Fatalf("壊れた通常レコードの挿入に失敗した: %v", err)
 		}
 
-		// 通常レコード
 		rec2 := createLogRec(2, "normal2")
 		if _, err := logMgr.Append(rec2); err != nil {
 			t.Fatal(err)
 		}
 
-		// 大きなレコード2
-		largeRec2 := createLargeLogRec(int(blocksize) + 200)
-		if _, err := logMgr.Append(largeRec2); err != nil {
-			t.Fatal(err)
-		}
-
 		logMgr.Flush(logMgr.latestLSN)
 
-		// 通常レコード・フラグメントレコードが混在していても、
-		// Iterator が追加順に論理レコードを返すことを確認する。
 		iter, err := logMgr.Iterater(startLSN)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		// 実行は先に行い、検証をsubtestに分割する（1ケース=1期待値）
-		lsn1, gotRec1 := iter.Next()
-		lsn2, gotLarge1 := iter.Next()
-		// rec1は単一レコードとして保存されるため、物理サイズはtype分だけ増える
-		rec1BytesNeeded := int32Size + recTypeSize + int32(len(rec1))
-		largeRec1lsn := startLSN + rec1BytesNeeded
-		lsn3, gotRec2 := iter.Next()
-		readBackRec2, err := logMgr.ReadRecordAt(lsn3)
+		lsn1, got1 := iter.Next()
+		lsn2, got2 := iter.Next()
+		got, err := logMgr.ReadRecordAt(lsn2)
 		if err != nil {
-			t.Fatalf("ReadRecordAt(rec2 lsn=%d)が失敗した: %v", lsn3, err)
-		}
-		lsn4, gotLarge2 := iter.Next()
-		readBackLarge2, err := logMgr.ReadRecordAt(lsn4)
-		if err != nil {
-			t.Fatalf("ReadRecordAt(largeRec2 lsn=%d)が失敗した: %v", lsn4, err)
+			t.Fatalf("ReadRecordAt(lsn=%d)が失敗した: %v", lsn2, err)
 		}
 
 		t.Run("1件目: LSNがstartLSNである", func(t *testing.T) {
@@ -1268,88 +1333,23 @@ func TestFragmentRecord(t *testing.T) {
 			}
 		})
 		t.Run("1件目: レコードがrec1である", func(t *testing.T) {
-			if !bytes.Equal(rec1, gotRec1) {
+			if !bytes.Equal(rec1, got1) {
 				t.Fatalf("1件目のレコードがrec1と一致しない")
 			}
 		})
-		t.Run("2件目: 大きいレコードlargeRec1のLSNが先頭の通常レコード直後である", func(t *testing.T) {
-			if lsn2 != largeRec1lsn {
-				t.Fatalf("2件目のLSNは%vであるべきだが%vだった", largeRec1lsn, lsn2)
+		t.Run("2件目: レコードがrec2である", func(t *testing.T) {
+			if !bytes.Equal(rec2, got2) {
+				t.Fatalf("2件目のレコードがrec2と一致しない")
 			}
 		})
-		t.Run("2件目: フラグメント化されたlargeRec1が1件の論理レコードとして復元される", func(t *testing.T) {
-			if !bytes.Equal(largeRec1, gotLarge1) {
-				t.Fatalf("2件目のレコードがlargeRec1と一致しない")
+		t.Run("2件目: 返ってきたLSNでReadRecordAtするとrec2が取れる", func(t *testing.T) {
+			if !bytes.Equal(rec2, got) {
+				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn2)
 			}
 		})
-		t.Run("3件目: largeRec1の次に通常レコードrec2が返る", func(t *testing.T) {
-			if !bytes.Equal(rec2, gotRec2) {
-				t.Fatalf("3件目のレコードがrec2と一致しない")
-			}
-		})
-		t.Run("3件目: 返ってきたLSNでReadRecordAtしてもrec2が取れる", func(t *testing.T) {
-			if !bytes.Equal(rec2, readBackRec2) {
-				t.Fatalf("ReadRecordAt(lsn=%d)でrec2が取れない", lsn3)
-			}
-		})
-		t.Run("4件目: 次の大きいレコードlargeRec2も1件の論理レコードとして復元される", func(t *testing.T) {
-			if !bytes.Equal(largeRec2, gotLarge2) {
-				t.Fatalf("4件目のレコードがlargeRec2と一致しない")
-			}
-		})
-		t.Run("4件目: 返ってきたLSNでReadRecordAtしてもlargeRec2が取れる", func(t *testing.T) {
-			if !bytes.Equal(largeRec2, readBackLarge2) {
-				t.Fatalf("ReadRecordAt(lsn=%d)でlargeRec2が取れない", lsn4)
-			}
-		})
-	})
-
-	t.Run("正常形: 単一ブロックに収まるレコードは非フラグメントとして扱われる", func(t *testing.T) {
-		t.Parallel()
-
-		const (
-			blocksize     = int32(256)
-			logfile       = "logfile"
-			startBoundary = int32Size
-			startLSN      = int32(blocksize + startBoundary)
-		)
-
-		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// 単一ブロックに収まるレコード
-		smallRec := createLogRec(1, "small")
-		if _, err := logMgr.Append(smallRec); err != nil {
-			t.Fatal(err)
-		}
-
-		logMgr.Flush(logMgr.latestLSN)
-
-		iter, err := logMgr.Iterater(startLSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lsn, reconstructed := iter.Next()
-		t.Run("LSNがstartLSNである", func(t *testing.T) {
-			if lsn != startLSN {
-				t.Fatalf("LSNは%vであるべきだが%vだった", startLSN, lsn)
-			}
-		})
-		t.Run("レコードが元と一致する", func(t *testing.T) {
-			if !bytes.Equal(smallRec, reconstructed) {
-				t.Fatalf("レコードが一致しない")
-			}
-		})
-		t.Run("ディスク上のtypeがnormalである", func(t *testing.T) {
-			raw := logMgr.logpage.GetBytes(startBoundary)
-			if len(raw) < int(recTypeSize) {
-				t.Fatalf("rawレコードが短すぎる: len=%d", len(raw))
-			}
-			p := file.NewLogPage(raw)
-			if got := p.GetInt32(recTypeOffset); got != recTypeNormal {
-				t.Fatalf("recTypeは%vであるべきだが%vだった", recTypeNormal, got)
+		t.Run("3件目: レコードがこれ以上無い", func(t *testing.T) {
+			if iter.HasNext() {
+				t.Fatalf("3件目のレコードがこれ以上無いはずだがある")
 			}
 		})
 	})
