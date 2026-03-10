@@ -392,39 +392,16 @@ func (logIter *LogIterator) Next() (int32, []byte) {
 		currentLSN := logIter.currentLSN
 		logIter.nextToRecordPosition(len(rec))
 
-		// フラグメントかどうか判定
-		if !logIter.isFragment(rec) {
-			// 非フラグメントのペイロード（共通ヘッダを剥がして返す）
-			if len(rec) >= int(recTypeSize) {
-				pr := file.NewLogPage(rec)
-				if pr.GetInt32(recTypeOffset) == recTypeNormal {
-					return currentLSN, rec[int(recTypeSize):]
-				}
+		if logIter.isFragment(rec) {
+			if payload, ok := logIter.extractFragmentPayload(rec); ok {
+				return currentLSN, payload
 			}
-			// 想定外（壊れている等）の場合は生のペイロードを返す
-			return currentLSN, rec
-		}
-
-		flags := logIter.getFragmentFlags(rec)
-		switch flags {
-		case fragFirst:
-			// FIRST から順方向にチェインを復元
-			totalLen, ok := logIter.validateFragmentHeader(rec)
-			if !ok {
-				continue
-			}
-			if reconstructed, ok := logIter.reconstructFragmentChain(rec, totalLen); ok {
-				return currentLSN, reconstructed
-			}
-			// 復元に失敗した場合は、この論理レコードをスキップして次の論理レコード探索を続ける
 			continue
-		case fragCont, fragLast:
-			// CONT や FIRST が単独で出てきた場合は孤立フラグメントとみなしスキップ
-			continue
-		default:
-			// 想定外のフラグ。非フラグメントとして扱う
-			return -1, rec
 		}
+		if payload, ok := logIter.extractNormalPayload(rec); ok {
+			return currentLSN, payload
+		}
+		continue
 	}
 }
 
@@ -512,6 +489,37 @@ func (logIter *LogIterator) isFragment(rec []byte) bool {
 	}
 	// flags領域を読むための最小長
 	return len(rec) >= int(fragPayloadOffset)
+}
+
+// extractNormalPayload は rec が有効な通常レコードなら payload を返す
+// 戻り値: (payload, ok)。異常時は (nil, false)
+func (logIter *LogIterator) extractNormalPayload(rec []byte) ([]byte, bool) {
+	if len(rec) < int(recTypeSize) {
+		return nil, false
+	}
+	pr := file.NewLogPage(rec)
+	if pr.GetInt32(recTypeOffset) != recTypeNormal {
+		return nil, false
+	}
+	return rec[int(recTypeSize):], true
+}
+
+// extractFragmentPayload は rec が有効なフラグメントなら復元した payload を返す
+// 戻り値: (payload, ok)。異常時は (nil, false)
+func (logIter *LogIterator) extractFragmentPayload(rec []byte) ([]byte, bool) {
+	flags := logIter.getFragmentFlags(rec)
+	switch flags {
+	case fragFirst:
+		totalLen, ok := logIter.validateFragmentHeader(rec)
+		if !ok {
+			return nil, false
+		}
+		return logIter.reconstructFragmentChain(rec, totalLen)
+	case fragCont, fragLast:
+		return nil, false // 孤立フラグメント
+	default:
+		return nil, false // 想定外のフラグ
+	}
 }
 
 // フラグメントレコードのフラグを取得する
