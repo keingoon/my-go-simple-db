@@ -44,8 +44,8 @@ func initRecoveryBase(t *testing.T) *recoveryTestBase {
 		t.Fatalf("failed to create LogMgr: %v", err)
 	}
 	// For tests, make sure Recovery's scan start LSN never points to the log header block.
-	if err := lm.WriteMasterLSN(firstLSN); err != nil {
-		t.Fatalf("failed to write master LSN: %v", err)
+	if err := lm.WriteLastCheckpointLSN(firstLSN); err != nil {
+		t.Fatalf("failed to write last checkpoint LSN: %v", err)
 	}
 	bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 
@@ -395,8 +395,8 @@ func TestRecoveryMgr(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to create LogMgr: %v", err)
 		}
-		if err := lm.WriteMasterLSN(firstLSN); err != nil {
-			t.Fatalf("failed to write master LSN: %v", err)
+		if err := lm.WriteLastCheckpointLSN(firstLSN); err != nil {
+			t.Fatalf("failed to write last checkpoint LSN: %v", err)
 		}
 		bm := buffer.NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
 
@@ -2166,19 +2166,19 @@ func TestRecoveryMgr(t *testing.T) {
 			}
 		})
 
-		t.Run("ReadMasterLSN で CheckpointBeginRecord の LSN が取得できる", func(t *testing.T) {
+		t.Run("ReadLastCheckpointLSN で CheckpointBeginRecord の LSN が取得できる", func(t *testing.T) {
 			endRecords := collectLogRecords[*logrecord.CheckpointEndRecord](lm, firstLSN, nil)
 			if len(endRecords) != 1 {
 				t.Fatalf("CheckpointEndRecord expected 1, got %d", len(endRecords))
 			}
 			checkpointBeginLSN := endRecords[0].Rec.BeginLSN()
 
-			masterLSN, err := lm.ReadMasterLSN()
+			lastCheckpointLSN, err := lm.ReadLastCheckpointLSN()
 			if err != nil {
-				t.Fatalf("ReadMasterLSN failed: %v", err)
+				t.Fatalf("ReadLastCheckpointLSN failed: %v", err)
 			}
-			if masterLSN != checkpointBeginLSN {
-				t.Errorf("CheckpointBeginRecord の LSN が取得できない: expected %d, got %d", checkpointBeginLSN, masterLSN)
+			if lastCheckpointLSN != checkpointBeginLSN {
+				t.Errorf("CheckpointBeginRecord の LSN が取得できない: expected %d, got %d", checkpointBeginLSN, lastCheckpointLSN)
 			}
 		})
 	})

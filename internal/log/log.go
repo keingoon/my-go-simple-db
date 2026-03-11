@@ -64,6 +64,13 @@ type LogMgr struct {
 	mu           sync.RWMutex
 }
 
+type logHeader struct {
+	magic             int32
+	version           int16
+	pageSize          int32
+	lastCheckpointLSN int32
+}
+
 func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 	logMgr := &LogMgr{fm: fm, logfile: logfile, logpage: nil, currentblk: nil, latestLSN: 0, lastSavedLSN: 0}
 
@@ -85,35 +92,20 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 			return nil, fmt.Errorf("unexpected header block number: %d", hdrBlk.Number())
 		}
 
-		hdr := file.NewLogPage(make([]byte, fm.BlockSize()))
-		if err := hdr.SetInt32(headerMagicOffset, logHeaderMagic); err != nil {
-			return nil, fmt.Errorf("could not write header magic: %w", err)
-		}
-		if err := hdr.SetInt16(headerVersionOffset, logHeaderVersion); err != nil {
-			return nil, fmt.Errorf("could not write header version: %w", err)
-		}
-		if err := hdr.SetInt32(headerPageSizeOffset, fm.BlockSize()); err != nil {
-			return nil, fmt.Errorf("could not write header page size: %w", err)
-		}
 		firstLSN := fm.BlockSize() + int32Size
-		if err := hdr.SetInt32(headerLastCheckpointLSNOffset, firstLSN); err != nil {
-			return nil, fmt.Errorf("could not write header last checkpoint lsn: %w", err)
+		hdr := &logHeader{
+			magic:             logHeaderMagic,
+			version:           logHeaderVersion,
+			pageSize:          fm.BlockSize(),
+			lastCheckpointLSN: firstLSN,
 		}
-		if err := fm.Write(hdrBlk, hdr); err != nil {
-			return nil, fmt.Errorf("could not write header block: %w", err)
+		if err := logMgr.writeHeader(hdr); err != nil {
+			return nil, fmt.Errorf("could not initialize log header: %w", err)
 		}
 	} else {
 		// ログヘッダーブロックの値チェックバリデーション
-		hdrBlk := file.NewBlockId(logfile, 0)
-		hdr := file.NewLogPage(make([]byte, fm.BlockSize()))
-		if err := fm.Read(hdrBlk, hdr); err != nil {
-			return nil, fmt.Errorf("could not read header block: %w", err)
-		}
-		if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
-			return nil, fmt.Errorf("invalid log header magic")
-		}
-		if hdr.GetInt32(headerPageSizeOffset) != fm.BlockSize() {
-			return nil, fmt.Errorf("mismatched page size in header")
+		if _, err := logMgr.readHeader(); err != nil {
+			return nil, fmt.Errorf("could not validate log header: %w", err)
 		}
 	}
 
@@ -543,38 +535,69 @@ func (logIter *LogIterator) validateFragmentHeader(rec []byte) (int32, bool) {
 	return totalLen, true
 }
 
-func (logMgr *LogMgr) ReadMasterLSN() (int32, error) {
-	logMgr.mu.RLock()
-	defer logMgr.mu.RUnlock()
-
+func (logMgr *LogMgr) readHeader() (*logHeader, error) {
 	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
-	hdr := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
-	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
-		return 0, fmt.Errorf("could not read header block: %w", err)
+	hdrPage := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
+	if err := logMgr.fm.Read(hdrBlk, hdrPage); err != nil {
+		return nil, fmt.Errorf("could not read header block: %w", err)
 	}
-	if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
-		return 0, fmt.Errorf("invalid log header magic")
+
+	hdr := &logHeader{
+		magic:             hdrPage.GetInt32(headerMagicOffset),
+		version:           hdrPage.GetInt16(headerVersionOffset),
+		pageSize:          hdrPage.GetInt32(headerPageSizeOffset),
+		lastCheckpointLSN: hdrPage.GetInt32(headerLastCheckpointLSNOffset),
 	}
-	return hdr.GetInt32(headerLastCheckpointLSNOffset), nil
+	if hdr.magic != logHeaderMagic {
+		return nil, fmt.Errorf("invalid log header magic")
+	}
+	if hdr.pageSize != logMgr.fm.BlockSize() {
+		return nil, fmt.Errorf("mismatched page size in header")
+	}
+
+	return hdr, nil
 }
 
-func (logMgr *LogMgr) WriteMasterLSN(lsn int32) error {
-	logMgr.mu.Lock()
-	defer logMgr.mu.Unlock()
-
+func (logMgr *LogMgr) writeHeader(hdr *logHeader) error {
 	hdrBlk := file.NewBlockId(logMgr.logfile, 0)
-	hdr := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
-	if err := logMgr.fm.Read(hdrBlk, hdr); err != nil {
-		return fmt.Errorf("could not read header block: %w", err)
+	hdrPage := file.NewLogPage(make([]byte, logMgr.fm.BlockSize()))
+	if err := hdrPage.SetInt32(headerMagicOffset, hdr.magic); err != nil {
+		return fmt.Errorf("could not write header magic: %w", err)
 	}
-	if hdr.GetInt32(headerMagicOffset) != logHeaderMagic {
-		return fmt.Errorf("invalid log header magic")
+	if err := hdrPage.SetInt16(headerVersionOffset, hdr.version); err != nil {
+		return fmt.Errorf("could not write header version: %w", err)
 	}
-	if err := hdr.SetInt32(headerLastCheckpointLSNOffset, lsn); err != nil {
-		return fmt.Errorf("could not set master LSN: %w", err)
+	if err := hdrPage.SetInt32(headerPageSizeOffset, hdr.pageSize); err != nil {
+		return fmt.Errorf("could not write header page size: %w", err)
 	}
-	if err := logMgr.fm.Write(hdrBlk, hdr); err != nil {
+	if err := hdrPage.SetInt32(headerLastCheckpointLSNOffset, hdr.lastCheckpointLSN); err != nil {
+		return fmt.Errorf("could not write header last checkpoint lsn: %w", err)
+	}
+	if err := logMgr.fm.Write(hdrBlk, hdrPage); err != nil {
 		return fmt.Errorf("could not write header block: %w", err)
 	}
 	return nil
+}
+
+func (logMgr *LogMgr) ReadLastCheckpointLSN() (int32, error) {
+	logMgr.mu.RLock()
+	defer logMgr.mu.RUnlock()
+
+	hdr, err := logMgr.readHeader()
+	if err != nil {
+		return 0, err
+	}
+	return hdr.lastCheckpointLSN, nil
+}
+
+func (logMgr *LogMgr) WriteLastCheckpointLSN(lsn int32) error {
+	logMgr.mu.Lock()
+	defer logMgr.mu.Unlock()
+
+	hdr, err := logMgr.readHeader()
+	if err != nil {
+		return err
+	}
+	hdr.lastCheckpointLSN = lsn
+	return logMgr.writeHeader(hdr)
 }

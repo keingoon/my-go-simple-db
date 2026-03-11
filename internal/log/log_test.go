@@ -460,8 +460,8 @@ func TestLogMgr(t *testing.T) {
 		}
 	})
 
-	// Master LSN tests
-	t.Run("MasterLSN: 初期値はfirstLSNである", func(t *testing.T) {
+	// Last checkpoint LSN tests
+	t.Run("LastCheckpointLSN: 初期値はfirstLSNである", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -474,17 +474,17 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		masterLsn, err := logMgr.ReadMasterLSN()
+		lastCheckpointLSN, err := logMgr.ReadLastCheckpointLSN()
 		if err != nil {
 			t.Fatal(err)
 		}
 		want := blocksize + int32Size
-		if masterLsn != want {
-			t.Errorf("master LSNは%vであるべきだが%vだった", want, masterLsn)
+		if lastCheckpointLSN != want {
+			t.Errorf("last checkpoint LSNは%vであるべきだが%vだった", want, lastCheckpointLSN)
 		}
 	})
 
-	t.Run("MasterLSN: Write後にReadでき、再オープンしても保持される", func(t *testing.T) {
+	t.Run("LastCheckpointLSN: Write後にReadでき、再オープンしても保持される", func(t *testing.T) {
 		t.Parallel()
 
 		const (
@@ -499,11 +499,11 @@ func TestLogMgr(t *testing.T) {
 		}
 
 		var want int32 = 42
-		if err := logMgr.WriteMasterLSN(want); err != nil {
+		if err := logMgr.WriteLastCheckpointLSN(want); err != nil {
 			t.Fatal(err)
 		}
 
-		masterLsn, err := logMgr.ReadMasterLSN()
+		lastCheckpointLSN, err := logMgr.ReadLastCheckpointLSN()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -512,20 +512,20 @@ func TestLogMgr(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		masterLsn2, err := reopened.ReadMasterLSN()
+		lastCheckpointLSN2, err := reopened.ReadLastCheckpointLSN()
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		t.Run("Write直後にReadすると書いた値が返る", func(t *testing.T) {
-			if masterLsn != want {
-				t.Fatalf("master LSNは%vであるべきだが%vだった", want, masterLsn)
+			if lastCheckpointLSN != want {
+				t.Fatalf("last checkpoint LSNは%vであるべきだが%vだった", want, lastCheckpointLSN)
 			}
 		})
 
 		t.Run("再オープン後も同じ値が返る", func(t *testing.T) {
-			if masterLsn2 != want {
-				t.Fatalf("master LSNは%vであるべきだが%vだった", want, masterLsn2)
+			if lastCheckpointLSN2 != want {
+				t.Fatalf("last checkpoint LSNは%vであるべきだが%vだった", want, lastCheckpointLSN2)
 			}
 		})
 	})

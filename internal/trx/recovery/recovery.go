@@ -134,8 +134,8 @@ func (rMgr *RecoveryMgr) Checkpoint(ctx context.Context) (int32, error) {
 	}
 	rMgr.lm.Flush(endLSN)
 
-	if err := rMgr.lm.WriteMasterLSN(beginLSN); err != nil {
-		return -1, fmt.Errorf("could not write master LSN: %w", err)
+	if err := rMgr.lm.WriteLastCheckpointLSN(beginLSN); err != nil {
+		return -1, fmt.Errorf("could not write last checkpoint LSN: %w", err)
 	}
 	return endLSN, nil
 }
@@ -297,12 +297,12 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, txAccess *access.Transa
 }
 
 func (rMgr *RecoveryMgr) doAnalyzePhase(recovAtTbl *ActiveTrxTable, recovDptTbl *buffer.DirtyPageTable) error {
-	masterLSN, err := rMgr.lm.ReadMasterLSN()
+	startLSN, err := rMgr.lm.ReadLastCheckpointLSN()
 	if err != nil {
-		return fmt.Errorf("could not read master LSN: %w", err)
+		return fmt.Errorf("could not read last checkpoint LSN: %w", err)
 	}
 
-	iter, err := rMgr.lm.Iterater(masterLSN)
+	iter, err := rMgr.lm.Iterater(startLSN)
 	if err != nil {
 		return fmt.Errorf("could not get log iterator: %w", err)
 	}
