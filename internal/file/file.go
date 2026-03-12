@@ -400,23 +400,12 @@ func (kmu *keyMutex) mutexFor(key string) *sync.Mutex {
 	return mu
 }
 
-func (kmu *keyMutex) lookup(key string) (*sync.Mutex, bool) {
-	kmu.mu.Lock()
-	defer kmu.mu.Unlock()
-
-	mu, ok := kmu.kmu[key]
-	return mu, ok
-}
-
 func (kmu *keyMutex) Lock(key string) {
 	mu := kmu.mutexFor(key)
 	mu.Lock()
 }
 
 func (kmu *keyMutex) Unlock(key string) {
-	mu, ok := kmu.lookup(key)
-	if !ok {
-		panic("unlock of unknown key mutex: " + key)
-	}
+	mu := kmu.mutexFor(key)
 	mu.Unlock()
 }
