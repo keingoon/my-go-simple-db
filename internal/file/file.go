@@ -216,6 +216,7 @@ type FileMgr struct {
 	blocksize       int32
 	isNew           bool
 	openFiles       map[string]*os.File
+	mu              sync.Mutex
 	rwCnt           *RwCnt
 	kmu             keyMutex
 }
@@ -262,11 +263,14 @@ func NewFileMgr(dbDirectoryPath string, blocksize int32) (*FileMgr, error) {
 }
 
 func (mgr *FileMgr) Read(blk *BlockId, page *Page) error {
-	f, unlock, err := mgr.getFile(blk.FileName())
+	filename := blk.FileName()
+	mgr.kmu.Lock(filename)
+	defer mgr.kmu.Unlock(filename)
+
+	f, err := mgr.getFile(filename)
 	if err != nil {
 		return err
 	}
-	defer unlock()
 
 	if _, err = f.ReadAt(page.bb, int64(blk.Number()*mgr.blocksize)); err != nil {
 		return fmt.Errorf("could not read block to page %d, %w", blk.Number()*mgr.blocksize, err)
@@ -279,11 +283,14 @@ func (mgr *FileMgr) Read(blk *BlockId, page *Page) error {
 }
 
 func (mgr *FileMgr) Write(blk *BlockId, page *Page) error {
-	f, unlock, err := mgr.getFile(blk.FileName())
+	filename := blk.FileName()
+	mgr.kmu.Lock(filename)
+	defer mgr.kmu.Unlock(filename)
+
+	f, err := mgr.getFile(filename)
 	if err != nil {
 		return err
 	}
-	defer unlock()
 
 	if _, err = f.WriteAt(page.bb, int64(blk.Number()*mgr.blocksize)); err != nil {
 		return fmt.Errorf("could not write page to block %d, %w", blk.Number()*mgr.blocksize, err)
@@ -296,11 +303,13 @@ func (mgr *FileMgr) Write(blk *BlockId, page *Page) error {
 }
 
 func (mgr *FileMgr) Append(filename string) (*BlockId, error) {
-	f, unlock, err := mgr.getFile(filename)
+	mgr.kmu.Lock(filename)
+	defer mgr.kmu.Unlock(filename)
+
+	f, err := mgr.getFile(filename)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
 
 	newblknum, err := mgr.LengthFromFileObj(f)
 	if err != nil {
@@ -316,11 +325,13 @@ func (mgr *FileMgr) Append(filename string) (*BlockId, error) {
 }
 
 func (mgr *FileMgr) Length(filename string) (int32, error) {
-	f, unlock, err := mgr.getFile(filename)
+	mgr.kmu.Lock(filename)
+	defer mgr.kmu.Unlock(filename)
+
+	f, err := mgr.getFile(filename)
 	if err != nil {
 		return 0, err
 	}
-	defer unlock()
 
 	return mgr.LengthFromFileObj(f)
 }
@@ -341,19 +352,20 @@ func (mgr *FileMgr) BlockSize() int32 {
 	return mgr.blocksize
 }
 
-func (mgr *FileMgr) getFile(filename string) (*os.File, func(), error) {
-	unlock := mgr.kmu.lock(filename)
+func (mgr *FileMgr) getFile(filename string) (*os.File, error) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
 
 	f, found := mgr.openFiles[filename]
 	if !found {
 		f, err := os.OpenFile(path.Join(mgr.dbDirectoryPath, filename), os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
-			return &os.File{}, unlock, fmt.Errorf("could not get file %s: %w", filename, err)
+			return nil, fmt.Errorf("could not get file %s: %w", filename, err)
 		}
 		mgr.openFiles[filename] = f
-		return f, unlock, nil
+		return f, nil
 	}
-	return f, unlock, nil
+	return f, nil
 }
 
 func (mgr *FileMgr) incRwCnt(rw string) {
@@ -368,12 +380,43 @@ func (mgr *FileMgr) incRwCnt(rw string) {
 }
 
 type keyMutex struct {
-	kmu sync.Map
+	mu  sync.Mutex
+	kmu map[string]*sync.Mutex
 }
 
-func (kmu *keyMutex) lock(key string) func() {
-	kmu.kmu.Store(key, true)
-	return func() {
-		kmu.kmu.Delete(key)
+func (kmu *keyMutex) mutexFor(key string) *sync.Mutex {
+	kmu.mu.Lock()
+	defer kmu.mu.Unlock()
+
+	if kmu.kmu == nil {
+		kmu.kmu = make(map[string]*sync.Mutex)
 	}
+	mu, ok := kmu.kmu[key]
+	if ok {
+		return mu
+	}
+	mu = &sync.Mutex{}
+	kmu.kmu[key] = mu
+	return mu
+}
+
+func (kmu *keyMutex) lookup(key string) (*sync.Mutex, bool) {
+	kmu.mu.Lock()
+	defer kmu.mu.Unlock()
+
+	mu, ok := kmu.kmu[key]
+	return mu, ok
+}
+
+func (kmu *keyMutex) Lock(key string) {
+	mu := kmu.mutexFor(key)
+	mu.Lock()
+}
+
+func (kmu *keyMutex) Unlock(key string) {
+	mu, ok := kmu.lookup(key)
+	if !ok {
+		panic("unlock of unknown key mutex: " + key)
+	}
+	mu.Unlock()
 }

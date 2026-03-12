@@ -2,6 +2,7 @@ package file
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -434,5 +435,78 @@ func TestFileMgr(t *testing.T) {
 				t.Errorf("Lengthは%dであるべきだが%dだった", expectedlen, gotLen)
 			}
 		})
+	})
+
+	t.Run("FileMgr: 同一filenameへの並行Appendでblock番号は重複しない", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			filename  = "testfile"
+			workers   = 8
+		)
+		mgr, err := NewFileMgr(t.TempDir(), blocksize)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		blks := make(chan *BlockId, workers)
+		errs := make(chan error, workers)
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				blk, err := mgr.Append(filename)
+				if err != nil {
+					errs <- err
+					return
+				}
+				blks <- blk
+			}()
+		}
+
+		wg.Wait()
+		close(blks)
+		close(errs)
+
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("Append failed: %v", err)
+			}
+		}
+
+		gotNums := map[int32]bool{}
+		for blk := range blks {
+			if blk == nil {
+				t.Fatal("blkはnilでないべき")
+			}
+			if blk.FileName() != filename {
+				t.Fatalf("filenameは%qであるべきだが%qだった", filename, blk.FileName())
+			}
+			if gotNums[blk.Number()] {
+				t.Fatalf("block番号%dが重複した", blk.Number())
+			}
+			gotNums[blk.Number()] = true
+		}
+
+		if len(gotNums) != workers {
+			t.Fatalf("block番号の件数は%dであるべきだが%dだった", workers, len(gotNums))
+		}
+
+		for i := 0; i < workers; i++ {
+			if !gotNums[int32(i)] {
+				t.Fatalf("block番号%dが見つからない", i)
+			}
+		}
+
+		gotLen, err := mgr.Length(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotLen != workers {
+			t.Fatalf("Lengthは%dであるべきだが%dだった", workers, gotLen)
+		}
 	})
 }
