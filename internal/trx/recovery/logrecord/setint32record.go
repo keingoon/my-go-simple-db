@@ -59,16 +59,22 @@ func (r *SetInt32Record) String() string {
 	return fmt.Sprintf("<SETINT32 %d %s %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetInt32Record) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetInt32Record) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyInt32(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
-func (r *SetInt32Record) RedoPage(ctx context.Context, txAccess *access.Transaction) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetInt32Record) RedoPage(ctx context.Context, txAccess *access.Transaction) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyInt32(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
 func (r *SetInt32Record) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {

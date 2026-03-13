@@ -94,9 +94,12 @@ func TestBufferList(t *testing.T) {
 		env := newBufferListTestEnv(t, "")
 		bl := env.bl
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -118,10 +121,13 @@ func TestBufferList(t *testing.T) {
 		bl := env.bl
 		bm := env.bm
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 		before := bm.Available()
 
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -138,9 +144,12 @@ func TestBufferList(t *testing.T) {
 		bl := env.bl
 		bm := env.bm
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -162,10 +171,13 @@ func TestBufferList(t *testing.T) {
 		env := newBufferListTestEnv(t, "")
 		bl := env.bl
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 
 		// Pin a block
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -183,10 +195,13 @@ func TestBufferList(t *testing.T) {
 		env := newBufferListTestEnv(t, "")
 		bl := env.bl
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 
 		// Pin a block twice
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -209,9 +224,12 @@ func TestBufferList(t *testing.T) {
 		env := newBufferListTestEnv(t, "")
 		bl := env.bl
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -235,11 +253,20 @@ func TestBufferList(t *testing.T) {
 		bl := env.bl
 		ctx := context.Background()
 
-		blk1 := file.NewBlockId("testfile1", 0)
-		blk2 := file.NewBlockId("testfile1", 1)
-		blk3 := file.NewBlockId("testfile2", 0)
+		blk1, err := env.fm.Append("testfile1")
+		if err != nil {
+			t.Fatalf("Failed to append testfile1 block1: %v", err)
+		}
+		blk2, err := env.fm.Append("testfile1")
+		if err != nil {
+			t.Fatalf("Failed to append testfile1 block2: %v", err)
+		}
+		blk3, err := env.fm.Append("testfile2")
+		if err != nil {
+			t.Fatalf("Failed to append testfile2 block1: %v", err)
+		}
 
-		err := bl.Pin(ctx, blk1)
+		err = bl.Pin(ctx, blk1)
 		if err != nil {
 			t.Fatalf("Failed to pin testfile1 block1: %v", err)
 		}
@@ -268,10 +295,13 @@ func TestBufferList(t *testing.T) {
 		bl := env.bl
 		bm := env.bm
 		ctx := context.Background()
-		blk := file.NewBlockId("testfile", 0)
+		blk, err := env.fm.Append("testfile")
+		if err != nil {
+			t.Fatalf("Failed to append block: %v", err)
+		}
 		before := bm.Available()
 
-		err := bl.Pin(ctx, blk)
+		err = bl.Pin(ctx, blk)
 		if err != nil {
 			t.Fatalf("Failed to pin block: %v", err)
 		}
@@ -328,8 +358,14 @@ func TestBufferListConcurrency(t *testing.T) {
 		bm := env.bm
 		ctx := context.Background()
 		before := bm.Available()
-		blk1 := file.NewBlockId("testfile1", 0)
-		blk2 := file.NewBlockId("testfile2", 0)
+		blk1, err := env.fm.Append("testfile1")
+		if err != nil {
+			t.Fatalf("Failed to append testfile1 block: %v", err)
+		}
+		blk2, err := env.fm.Append("testfile2")
+		if err != nil {
+			t.Fatalf("Failed to append testfile2 block: %v", err)
+		}
 
 		done := make(chan bool, 2)
 

@@ -60,30 +60,45 @@ func NewRecoveryTransactionMgr(locktbl *concurrency.LockTable, fm *file.FileMgr,
 	return txmgr, nil
 }
 
-func (txmgr *TransactionMgr) Commit(ctx context.Context) {
-	txmgr.recoveryMgr.Commit(ctx)
+func (txmgr *TransactionMgr) Commit(ctx context.Context) error {
+	if _, err := txmgr.recoveryMgr.Commit(ctx); err != nil {
+		return fmt.Errorf("could not commit: %w", err)
+	}
 	fmt.Println("transaction ", txmgr.txnum, " commited")
-	txmgr.txAccess.Release(ctx)
+	if err := txmgr.txAccess.Release(ctx); err != nil {
+		return fmt.Errorf("could not release transaction resources after commit: %w", err)
+	}
 	txmgr.mybuffers.UnpinAll(ctx)
+	return nil
 }
 
-func (txmgr *TransactionMgr) Rollback(ctx context.Context) {
-	txmgr.recoveryMgr.Rollback(ctx)
+func (txmgr *TransactionMgr) Rollback(ctx context.Context) error {
+	if _, err := txmgr.recoveryMgr.Rollback(ctx); err != nil {
+		return fmt.Errorf("could not rollback: %w", err)
+	}
 	fmt.Println("transaction ", txmgr.txnum, " rolled back")
-	txmgr.txAccess.Release(ctx)
+	if err := txmgr.txAccess.Release(ctx); err != nil {
+		return fmt.Errorf("could not release transaction resources after rollback: %w", err)
+	}
 	txmgr.mybuffers.UnpinAll(ctx)
+	return nil
 }
 
 func (txmgr *TransactionMgr) Recover(ctx context.Context) error {
-	txmgr.bm.FlushAll(ctx, txmgr.txnum)
+	if err := txmgr.bm.FlushAll(ctx, txmgr.txnum); err != nil {
+		return fmt.Errorf("could not flush buffers before recover: %w", err)
+	}
 	if err := txmgr.recoveryMgr.Recover(ctx); err != nil {
 		return fmt.Errorf("could not recover: %w", err)
 	}
 	return nil
 }
 
-func (txmgr *TransactionMgr) Pin(ctx context.Context, blk *file.BlockId) {
-	txmgr.txAccess.Pin(ctx, blk)
+func (txmgr *TransactionMgr) Pin(ctx context.Context, blk *file.BlockId) error {
+	if err := txmgr.txAccess.Pin(ctx, blk); err != nil {
+		return fmt.Errorf("could not pin block: %w", err)
+	}
+	return nil
 }
 
 func (txmgr *TransactionMgr) Unpin(ctx context.Context, blk *file.BlockId) {

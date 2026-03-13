@@ -21,7 +21,7 @@ type DirtyingLogRecord interface {
 type UndoableUpdateLogRecord interface {
 	logrecord.LogRecord
 	Blk() *file.BlockId
-	UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32)
+	UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) error
 	WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error)
 }
 
@@ -34,7 +34,7 @@ type UndoableCLRLogRecord interface {
 type RedoableLogRecord interface {
 	logrecord.LogRecord
 	Blk() *file.BlockId
-	RedoPage(ctx context.Context, txAccess *access.Transaction)
+	RedoPage(ctx context.Context, txAccess *access.Transaction) error
 }
 
 type RecoveryMgr struct {
@@ -281,7 +281,9 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, txAccess *access.Transa
 		}
 		rMgr.lm.Flush(clrLSN)
 
-		setRec.UndoPage(ctx, txAccess, clrLSN)
+		if err := setRec.UndoPage(ctx, txAccess, clrLSN); err != nil {
+			return -1, fmt.Errorf("could not undo page: %w", err)
+		}
 
 		undoNextLSN = logRec.PrevLSN()
 		lastLSN = clrLSN
@@ -381,7 +383,9 @@ func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.
 					continue
 				}
 
-				setRec.RedoPage(ctx, recovTxAccess)
+				if err := setRec.RedoPage(ctx, recovTxAccess); err != nil {
+					return fmt.Errorf("could not redo page: %w", err)
+				}
 			default:
 				continue
 			}

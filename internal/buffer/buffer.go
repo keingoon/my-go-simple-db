@@ -54,23 +54,33 @@ func (buff *Buffer) ModifyingTx() int32 {
 	return buff.txnum
 }
 
-func (buff *Buffer) assignToBlock(blk *file.BlockId) {
-	buff.flush()
-	fm, contents := buff.fm, buff.contents
+func (buff *Buffer) assignToBlock(blk *file.BlockId) error {
+	if err := buff.flush(); err != nil {
+		return err
+	}
+
+	contents := buff.contents
+	if err := buff.fm.Read(blk, contents); err != nil {
+		return err
+	}
+
 	buff.blk = blk
-	fm.Read(blk, contents)
 	buff.pins = 0
+	return nil
 }
 
-func (buff *Buffer) flush() {
+func (buff *Buffer) flush() error {
 	fm, lm, contents, blk, txnum, pageLSN := buff.fm, buff.lm, buff.contents, buff.blk, buff.txnum, buff.pageLSN
 	if txnum >= 0 {
 		lm.Flush(pageLSN)
-		fm.Write(blk, contents)
+		if err := fm.Write(blk, contents); err != nil {
+			return err
+		}
 		buff.txnum = -1
 		buff.recLSN = -1
 		buff.dpt.Clean(blk)
 	}
+	return nil
 }
 
 func (buff *Buffer) pin() {
@@ -187,15 +197,18 @@ func (buffMgr *BufferMgr) Available() int32 {
 	return buffMgr.numAvailable
 }
 
-func (buffMgr *BufferMgr) FlushAll(ctx context.Context, txnum int32) {
+func (buffMgr *BufferMgr) FlushAll(ctx context.Context, txnum int32) error {
 	buffMgr.mu.Lock()
 	defer buffMgr.mu.Unlock()
 	bufferpool := buffMgr.bufferpool
 	for _, buff := range bufferpool {
 		if buff.ModifyingTx() == txnum {
-			buff.flush()
+			if err := buff.flush(); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func (buffMgr *BufferMgr) Unpin(ctx context.Context, buff *Buffer) {
@@ -218,9 +231,9 @@ func (buffMgr *BufferMgr) Pin(ctx context.Context, blk *file.BlockId) (*Buffer, 
 	buffMgr.mu.Lock()
 
 	var buff *Buffer
-	buff = buffMgr.tryToPin(blk)
+	buff, err := buffMgr.tryToPin(blk)
 
-	for buff == nil {
+	for buff == nil && err == nil {
 		// ロック中に現在のwaitChを確定
 		waitCh := buffMgr.waitCh
 		buffMgr.mu.Unlock()
@@ -228,36 +241,43 @@ func (buffMgr *BufferMgr) Pin(ctx context.Context, blk *file.BlockId) (*Buffer, 
 		select {
 		case <-waitCh:
 			buffMgr.mu.Lock()
-			buff = buffMgr.tryToPin(blk)
+			buff, err = buffMgr.tryToPin(blk)
 		case <-ctx.Done():
 			return nil, errors.New("buffer abort exception")
 		}
+	}
+	if err != nil {
+		buffMgr.mu.Unlock()
+		return nil, err
 	}
 	buffMgr.mu.Unlock()
 	return buff, nil
 }
 
-func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) *Buffer {
+func (buffMgr *BufferMgr) tryToPin(blk *file.BlockId) (*Buffer, error) {
 	var buff *Buffer
 	buff = buffMgr.findExistingBuffer(blk)
 	if buff == nil {
 		lruBufferList := buffMgr.lruBufferList
 		buff = lruBufferList.ChooseVictimBuffer()
 		if buff == nil {
-			return nil
+			return nil, nil
 		}
 
-		if buff.blk != nil {
-			buffMgr.blkBufferMap[buff.blk.HashCode()] = nil
+		oldBlk := buff.blk
+		if err := buff.assignToBlock(blk); err != nil {
+			return nil, err
 		}
-		buff.assignToBlock(blk)
+		if oldBlk != nil {
+			delete(buffMgr.blkBufferMap, oldBlk.HashCode())
+		}
 		buffMgr.blkBufferMap[blk.HashCode()] = buff
 	}
 	if !buff.IsPinned() {
 		buffMgr.numAvailable -= 1
 	}
 	buff.pin()
-	return buff
+	return buff, nil
 }
 
 func (buffMgr *BufferMgr) findExistingBuffer(blk *file.BlockId) *Buffer {

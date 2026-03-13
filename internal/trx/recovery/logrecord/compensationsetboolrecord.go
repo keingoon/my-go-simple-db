@@ -66,10 +66,13 @@ func (r *CompensationSetBoolRecord) String() string {
 	return fmt.Sprintf("<COMPENSATION SETBOOL %d %s %d %t %t %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal, r.undoNextLSN)
 }
 
-func (r *CompensationSetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
-	txAccess.Pin(ctx, r.blk)
+func (r *CompensationSetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
 // Layout:

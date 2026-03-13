@@ -60,10 +60,13 @@ func (r *SetBoolRecord) String() string {
 	return fmt.Sprintf("<SETBOOL %d %s %d %t %t>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetBoolRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetBoolRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyBool(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
 func (r *SetBoolRecord) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {
@@ -71,10 +74,13 @@ func (r *SetBoolRecord) WriteCLR(ctx context.Context, txAccess *access.Transacti
 	return WriteCompensationSetBoolToLog(lm, prevLSN, r.txnum, r.blk, r.offset, r.newVal, r.oldVal, undoNextLSN)
 }
 
-func (r *SetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
 // Layout:

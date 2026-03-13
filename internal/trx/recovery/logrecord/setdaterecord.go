@@ -62,16 +62,22 @@ func (r *SetDateRecord) String() string {
 	return fmt.Sprintf("<SETDATE %d %s %d %s %s>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
 }
 
-func (r *SetDateRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetDateRecord) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyDate(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
-func (r *SetDateRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) {
-	txAccess.Pin(ctx, r.blk)
+func (r *SetDateRecord) RedoPage(ctx context.Context, txAccess *access.Transaction) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
 	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
 	txAccess.Unpin(ctx, r.blk)
+	return nil
 }
 
 func (r *SetDateRecord) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {

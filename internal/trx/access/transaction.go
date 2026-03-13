@@ -70,8 +70,11 @@ func NewRecoveryTransaction(locktbl *concurrency.LockTable, fm *file.FileMgr, lm
 	return tx
 }
 
-func (tx *Transaction) Pin(ctx context.Context, blk *file.BlockId) {
-	tx.mybuffers.Pin(ctx, blk)
+func (tx *Transaction) Pin(ctx context.Context, blk *file.BlockId) error {
+	if err := tx.mybuffers.Pin(ctx, blk); err != nil {
+		return fmt.Errorf("trx could not pin: %w", err)
+	}
+	return nil
 }
 
 func (tx *Transaction) Unpin(ctx context.Context, blk *file.BlockId) {
