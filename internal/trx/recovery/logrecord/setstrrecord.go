@@ -26,14 +26,14 @@ func NewSetStrRecord(p *file.Page, lsn int32) *SetStrRecord {
 	txnum := p.GetInt32(int32(tPos))
 	fPos := tPos + int32Size
 	filename := p.GetStr(int32(fPos))
-	bPos := fPos + file.MaxLength(len(filename))
+	bPos := fPos + file.VarBytesLen(len(filename))
 	blknum := p.GetInt32(int32(bPos))
 	blk := file.NewBlockId(filename, blknum)
 	oPos := bPos + int32Size
 	offset := p.GetInt32(int32(oPos))
 	oldPos := oPos + int32Size
 	oldVal := p.GetStr(int32(oldPos))
-	newPos := oldPos + file.MaxLength(len(oldVal))
+	newPos := oldPos + file.VarBytesLen(len(oldVal))
 	newVal := p.GetStr(int32(newPos))
 
 	return &SetStrRecord{
@@ -82,11 +82,11 @@ func WriteSetStrToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.Bloc
 	prevPos := int32Size
 	tPos := prevPos + int32Size
 	fPos := tPos + int32Size
-	bPos := fPos + file.MaxLength(len(blk.FileName()))
+	bPos := fPos + file.VarBytesLen(len(blk.FileName()))
 	oPos := bPos + int32Size
 	oldPos := oPos + int32Size
-	newPos := oldPos + file.MaxLength(len(oldVal))
-	recLen := newPos + file.MaxLength(len(newVal))
+	newPos := oldPos + file.VarBytesLen(len(oldVal))
+	recLen := newPos + file.VarBytesLen(len(newVal))
 	rec := make([]byte, recLen)
 	p := file.NewLogPage(rec)
 	p.SetInt32(0, setStr)

@@ -27,7 +27,7 @@ func NewCompensationSetInt32Record(p *file.Page, lsn int32) *CompensationSetInt3
 	txnum := p.GetInt32(int32(tPos))
 	fPos := tPos + int32Size
 	filename := p.GetStr(int32(fPos))
-	bPos := fPos + file.MaxLength(len(filename))
+	bPos := fPos + file.VarBytesLen(len(filename))
 	blknum := p.GetInt32(int32(bPos))
 	blk := file.NewBlockId(filename, blknum)
 	oPos := bPos + int32Size
@@ -77,7 +77,7 @@ func WriteCompensationSetInt32ToLog(lm *log.LogMgr, prevLSN int32, txnum int32, 
 	prevPos := int32Size
 	tPos := prevPos + int32Size
 	fPos := tPos + int32Size
-	bPos := fPos + file.MaxLength(len(blk.FileName()))
+	bPos := fPos + file.VarBytesLen(len(blk.FileName()))
 	oPos := bPos + int32Size
 	oldPos := oPos + int32Size
 	newPos := oldPos + int32Size

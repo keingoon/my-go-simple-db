@@ -49,14 +49,13 @@ func (b *BlockId) HashCode() uint64 {
 }
 
 const (
-	int32Size         = 4
-	int16Size         = 2
-	boolSize          = 1
-	dateSize          = 8  // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
-	maxStrBytesLength = 1  // US ASCII のみを使用するので1文字1バイト想定
-	pageHeaderSize    = 64 // ページヘッダーのサイズ
-	pageTypeOffset    = 0
-	pageLSNOffset     = int32Size
+	int32Size      = 4
+	int16Size      = 2
+	boolSize       = 1
+	dateSize       = 8  // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
+	pageHeaderSize = 64 // ページヘッダーのサイズ
+	pageTypeOffset = 0
+	pageLSNOffset  = int32Size
 )
 
 const (
@@ -205,8 +204,8 @@ func (p *Page) SetDate(offset int32, t time.Time) error {
 	return nil
 }
 
-func MaxLength(len int) int {
-	return int32Size + (len * maxStrBytesLength)
+func VarBytesLen(len int) int {
+	return int32Size + len
 }
 
 const tmpFileNamePrefix = "temp"

@@ -21,9 +21,9 @@ func initFileLogMgr(dir string, blocksize int32, logfile string) (*file.FileMgr,
 
 func createLogRec(i int32, str string) []byte {
 	recstrlen := len([]rune(str))
-	rec := make([]byte, int32Size+file.MaxLength(recstrlen))
+	rec := make([]byte, int32Size+file.VarBytesLen(recstrlen))
 	strpos := int32(0)
-	intpos := int32(int32Size + file.MaxLength(recstrlen))
+	intpos := int32(int32Size + file.VarBytesLen(recstrlen))
 	p := file.NewLogPage(rec)
 	p.SetStr(strpos, str)
 	p.SetInt32(intpos, i)
