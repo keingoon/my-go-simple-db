@@ -296,6 +296,55 @@ func TestTransaction(t *testing.T) {
 		tx.Unlock(ctx, blk)
 	})
 
+	t.Run("SetInt32: offset不正ならerrorを返しBufferを更新しない", func(t *testing.T) {
+		ctx := context.Background()
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 61)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		if err := tx.Pin(ctx, blk); err != nil {
+			t.Fatalf("Pin failed: %v", err)
+		}
+
+		logFn := func(buff *buffer.Buffer, offset int32, oldVal int32) (int32, error) {
+			return 11, nil
+		}
+		const invalidOffset int32 = 254
+		if err := tx.SetInt32(ctx, blk, invalidOffset, 123, true, logFn); err == nil {
+			t.Fatal("SetInt32は失敗するべき")
+		}
+
+		buff := tx.mybuffers.GetBuffer(blk)
+		if got := buff.ModifyingTx(); got != -1 {
+			t.Fatalf("失敗時のModifyingTxは-1であるべきだが%dだった", got)
+		}
+		tx.Unlock(ctx, blk)
+	})
+
+	t.Run("ApplyStr: offset不正ならerrorを返しBufferを更新しない", func(t *testing.T) {
+		ctx := context.Background()
+		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 62)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatalf("append block failed: %v", err)
+		}
+		if err := tx.Pin(ctx, blk); err != nil {
+			t.Fatalf("Pin failed: %v", err)
+		}
+
+		const invalidOffset int32 = 254
+		if err := tx.ApplyStr(ctx, 7, tx.txnum, blk, invalidOffset, "hello"); err == nil {
+			t.Fatal("ApplyStrは失敗するべき")
+		}
+
+		buff := tx.mybuffers.GetBuffer(blk)
+		if got := buff.ModifyingTx(); got != -1 {
+			t.Fatalf("失敗時のModifyingTxは-1であるべきだが%dだった", got)
+		}
+		tx.Unpin(ctx, blk)
+	})
+
 	t.Run("SLock/Unlock", func(t *testing.T) {
 		t.Run("SLock保持中は他トランザクションのXLockがタイムアウトまで待機する", func(t *testing.T) {
 			ctx := context.Background()

@@ -70,7 +70,10 @@ func (r *CompensationSetBoolRecord) RedoPage(ctx context.Context, txAccess *acce
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyBool(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }

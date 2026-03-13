@@ -72,7 +72,9 @@ func (buff *Buffer) assignToBlock(blk *file.BlockId) error {
 func (buff *Buffer) flush() error {
 	fm, lm, contents, blk, txnum, pageLSN := buff.fm, buff.lm, buff.contents, buff.blk, buff.txnum, buff.pageLSN
 	if txnum >= 0 {
-		lm.Flush(pageLSN)
+		if err := lm.Flush(pageLSN); err != nil {
+			return err
+		}
 		if err := fm.Write(blk, contents); err != nil {
 			return err
 		}

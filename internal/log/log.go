@@ -127,10 +127,13 @@ func NewLogMgr(fm *file.FileMgr, logfile string) (*LogMgr, error) {
 	return logMgr, nil
 }
 
-func (LogMgr *LogMgr) Flush(lsn int32) {
+func (LogMgr *LogMgr) Flush(lsn int32) error {
 	if lsn > LogMgr.lastSavedLSN {
-		LogMgr.flush()
+		if err := LogMgr.flush(); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (logMgr *LogMgr) Iterater(startLSN int32) (*LogIterator, error) {
@@ -179,7 +182,9 @@ func (logMgr *LogMgr) writeSingleRecord(logrec []byte) (int32, error) {
 	// ディスク上は [recType:int32][payload...] として保存する
 	rec := make([]byte, int(recTypeSize)+len(logrec))
 	p := file.NewLogPage(rec)
-	p.SetInt32(recTypeOffset, recTypeNormal)
+	if err := p.SetInt32(recTypeOffset, recTypeNormal); err != nil {
+		return 0, fmt.Errorf("could not set record type: %w", err)
+	}
 	copy(rec[int(recTypeSize):], logrec)
 
 	if err := logMgr.ensureAndWrite(rec); err != nil {
@@ -227,7 +232,10 @@ func (logMgr *LogMgr) writeFragmentChunk(logrec []byte, pos int, totalLen int, f
 
 	chunk := minInt(len(logrec)-pos, chunkLimit)
 	isLast := pos+chunk == len(logrec)
-	frag := logMgr.buildFragment(logrec[pos:pos+chunk], totalLen, first, isLast)
+	frag, err := logMgr.buildFragment(logrec[pos:pos+chunk], totalLen, first, isLast)
+	if err != nil {
+		return 0, fmt.Errorf("could not build fragmented logrec: %w", err)
+	}
 
 	// 無駄なブロック追加判定処理が発生しているが、汎用性を考えてこのようにしている
 	if err := logMgr.ensureAndWrite(frag); err != nil {
@@ -237,7 +245,7 @@ func (logMgr *LogMgr) writeFragmentChunk(logrec []byte, pos int, totalLen int, f
 }
 
 // フラグメントのバイト列を構築する
-func (logMgr *LogMgr) buildFragment(chunk []byte, totalLen int, first bool, isLast bool) []byte {
+func (logMgr *LogMgr) buildFragment(chunk []byte, totalLen int, first bool, isLast bool) ([]byte, error) {
 	var headerLen int32
 	if first {
 		headerLen = fragFirstPayloadOffset
@@ -247,21 +255,31 @@ func (logMgr *LogMgr) buildFragment(chunk []byte, totalLen int, first bool, isLa
 
 	frag := make([]byte, int(headerLen)+len(chunk))
 	fp := file.NewLogPage(frag)
-	fp.SetInt32(recTypeOffset, recTypeFragment)
+	if err := fp.SetInt32(recTypeOffset, recTypeFragment); err != nil {
+		return nil, fmt.Errorf("could not set fragment record type: %w", err)
+	}
 
 	if first {
-		fp.SetInt32(fragFlagsOffset, fragFirst)
-		fp.SetInt32(fragFirstTotalLenOffset, int32(totalLen))
+		if err := fp.SetInt32(fragFlagsOffset, fragFirst); err != nil {
+			return nil, fmt.Errorf("could not set first fragment flags: %w", err)
+		}
+		if err := fp.SetInt32(fragFirstTotalLenOffset, int32(totalLen)); err != nil {
+			return nil, fmt.Errorf("could not set first fragment total length: %w", err)
+		}
 		copy(frag[fragFirstPayloadOffset:], chunk)
 	} else {
 		if isLast {
-			fp.SetInt32(fragFlagsOffset, fragLast)
+			if err := fp.SetInt32(fragFlagsOffset, fragLast); err != nil {
+				return nil, fmt.Errorf("could not set last fragment flags: %w", err)
+			}
 		} else {
-			fp.SetInt32(fragFlagsOffset, fragCont)
+			if err := fp.SetInt32(fragFlagsOffset, fragCont); err != nil {
+				return nil, fmt.Errorf("could not set continued fragment flags: %w", err)
+			}
 		}
 		copy(frag[fragPayloadOffset:], chunk)
 	}
-	return frag
+	return frag, nil
 }
 
 // 現在のブロックで書き込めるチャンクの最大サイズを計算する
@@ -290,15 +308,22 @@ func (logMgr *LogMgr) appendNewBlock() (*file.BlockId, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not append new log block: %w", err)
 	}
-	logpage.SetInt32(0, int32Size)
-	fileMgr.Write(blk, logpage)
+	if err := logpage.SetInt32(0, int32Size); err != nil {
+		return nil, fmt.Errorf("could not initialize block boundary: %w", err)
+	}
+	if err := fileMgr.Write(blk, logpage); err != nil {
+		return nil, fmt.Errorf("could not write new log block: %w", err)
+	}
 	return blk, nil
 }
 
-func (logMgr *LogMgr) flush() {
+func (logMgr *LogMgr) flush() error {
 	fileMgr, currentblk, logpage := logMgr.fm, logMgr.currentblk, logMgr.logpage
-	fileMgr.Write(currentblk, logpage)
+	if err := fileMgr.Write(currentblk, logpage); err != nil {
+		return fmt.Errorf("could not flush log block: %w", err)
+	}
 	logMgr.lastSavedLSN = logMgr.latestLSN
+	return nil
 }
 
 func (logMgr *LogMgr) canFit(bytesNeeded int) bool {
@@ -307,7 +332,9 @@ func (logMgr *LogMgr) canFit(bytesNeeded int) bool {
 }
 
 func (logMgr *LogMgr) ensureNewBlock() error {
-	logMgr.flush()
+	if err := logMgr.flush(); err != nil {
+		return err
+	}
 	blk, err := logMgr.appendNewBlock()
 	if err != nil {
 		return err
@@ -324,10 +351,14 @@ func (logMgr *LogMgr) ensureAndWrite(rec []byte) error {
 		}
 	}
 	boundary := logMgr.logpage.GetInt32(0)
-	logMgr.logpage.SetBytes(boundary, rec)
+	if err := logMgr.logpage.SetBytes(boundary, rec); err != nil {
+		return fmt.Errorf("could not write log record to page: %w", err)
+	}
 
 	recpos := boundary + int32(bytesNeeded)
-	logMgr.logpage.SetInt32(0, recpos)
+	if err := logMgr.logpage.SetInt32(0, recpos); err != nil {
+		return fmt.Errorf("could not advance log page boundary: %w", err)
+	}
 
 	blockSize := logMgr.fm.BlockSize()
 	blkNumber := logMgr.currentblk.Number()

@@ -72,7 +72,10 @@ func (r *CompensationSetDateRecord) RedoPage(ctx context.Context, txAccess *acce
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }

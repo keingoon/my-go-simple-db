@@ -346,6 +346,25 @@ func TestLogMgr(t *testing.T) {
 		})
 	})
 
+	t.Run("appendNewBlock: 初期化できない場合はerrorを返す", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.logpage = file.NewLogPage(make([]byte, 0))
+		if _, err := logMgr.appendNewBlock(); err == nil {
+			t.Fatal("appendNewBlockは失敗するべき")
+		}
+	})
+
 	t.Run("Flush: 1件追加後にFlushするとディスクへ書き込まれる", func(t *testing.T) {
 		t.Parallel()
 
@@ -368,7 +387,9 @@ func TestLogMgr(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		logMgr.Flush(logMgr.latestLSN)
+		if err := logMgr.Flush(logMgr.latestLSN); err != nil {
+			t.Fatal(err)
+		}
 
 		blk := file.NewBlockId(logfile, 1)
 		logpage := file.NewLogPage(make([]byte, blocksize))
@@ -393,6 +414,55 @@ func TestLogMgr(t *testing.T) {
 				t.Fatalf("lastSavedLSNは%vであるべきだが%vだった", startLSN, logMgr.lastSavedLSN)
 			}
 		})
+	})
+
+	t.Run("Flush: 失敗時にlastSavedLSNを更新しない", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.latestLSN = 42
+		logMgr.lastSavedLSN = 0
+		logMgr.currentblk = file.NewBlockId(logfile, -1)
+
+		if err := logMgr.Flush(logMgr.latestLSN); err == nil {
+			t.Fatal("Flushは失敗するべき")
+		}
+		if logMgr.lastSavedLSN != 0 {
+			t.Fatalf("lastSavedLSNは更新されないべきだが%vだった", logMgr.lastSavedLSN)
+		}
+	})
+
+	t.Run("ensureAndWrite: 失敗時にlatestLSNを更新しない", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+		)
+
+		_, logMgr, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		logMgr.logpage = file.NewLogPage(make([]byte, int32Size))
+		logMgr.latestLSN = 0
+
+		if err := logMgr.ensureAndWrite([]byte("abc")); err == nil {
+			t.Fatal("ensureAndWriteは失敗するべき")
+		}
+		if logMgr.latestLSN != 0 {
+			t.Fatalf("latestLSNは更新されないべきだが%vだった", logMgr.latestLSN)
+		}
 	})
 
 	t.Run("ReadRecordAt: Flush後にlastSavedLSNで読むと追加レコードが取れる", func(t *testing.T) {
@@ -984,12 +1054,18 @@ func TestFragmentRecord(t *testing.T) {
 		dataFirst := bytes.Repeat([]byte{1}, 40)
 		dataCont := bytes.Repeat([]byte{2}, 40)
 
-		firstFrag := logMgr.buildFragment(dataFirst, totalLen, true /* first */, false /* isLast */)
+		firstFrag, err := logMgr.buildFragment(dataFirst, totalLen, true /* first */, false /* isLast */)
+		if err != nil {
+			t.Fatalf("buildFragment(firstFrag)が失敗した: %v", err)
+		}
 		if err := logMgr.ensureAndWrite(firstFrag); err != nil {
 			t.Fatalf("ensureAndWrite(firstFrag)が失敗した: %v", err)
 		}
 
-		contFrag := logMgr.buildFragment(dataCont, totalLen, false /* first */, false /* isLast */)
+		contFrag, err := logMgr.buildFragment(dataCont, totalLen, false /* first */, false /* isLast */)
+		if err != nil {
+			t.Fatalf("buildFragment(contFrag)が失敗した: %v", err)
+		}
 		if err := logMgr.ensureAndWrite(contFrag); err != nil {
 			t.Fatalf("ensureAndWrite(contFrag)が失敗した: %v", err)
 		}
@@ -1143,11 +1219,17 @@ func TestFragmentRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		contOnly := logMgr.buildFragment([]byte{1, 2, 3, 4}, 16, false /* first */, false /* isLast */)
+		contOnly, err := logMgr.buildFragment([]byte{1, 2, 3, 4}, 16, false /* first */, false /* isLast */)
+		if err != nil {
+			t.Fatalf("buildFragment(contOnly)が失敗した: %v", err)
+		}
 		if err := logMgr.ensureAndWrite(contOnly); err != nil {
 			t.Fatalf("孤立CONTの挿入に失敗した: %v", err)
 		}
-		lastOnly := logMgr.buildFragment([]byte{5, 6, 7, 8}, 16, false /* first */, true /* isLast */)
+		lastOnly, err := logMgr.buildFragment([]byte{5, 6, 7, 8}, 16, false /* first */, true /* isLast */)
+		if err != nil {
+			t.Fatalf("buildFragment(lastOnly)が失敗した: %v", err)
+		}
 		if err := logMgr.ensureAndWrite(lastOnly); err != nil {
 			t.Fatalf("孤立LASTの挿入に失敗した: %v", err)
 		}

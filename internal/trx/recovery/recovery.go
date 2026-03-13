@@ -81,7 +81,9 @@ func (rMgr *RecoveryMgr) Commit(ctx context.Context) (int32, error) {
 	if err != nil {
 		return -1, fmt.Errorf("could not commit: %w", err)
 	}
-	rMgr.lm.Flush(commitLSN)
+	if err := rMgr.lm.Flush(commitLSN); err != nil {
+		return -1, fmt.Errorf("could not flush commit log: %w", err)
+	}
 
 	rMgr.atTbl.setTrx(rMgr.txnum, commited, commitLSN)
 
@@ -104,7 +106,9 @@ func (rMgr *RecoveryMgr) Rollback(ctx context.Context) (int32, error) {
 	if err != nil {
 		return -1, fmt.Errorf("could not abort: %w", err)
 	}
-	rMgr.lm.Flush(abortLSN)
+	if err := rMgr.lm.Flush(abortLSN); err != nil {
+		return -1, fmt.Errorf("could not flush abort log: %w", err)
+	}
 	clrLastLSN, err := rMgr.doRollback(ctx, rMgr.txAccess, rMgr.txnum, prevLSN, abortLSN)
 	if err != nil {
 		return -1, fmt.Errorf("could not rollback: %w", err)
@@ -132,7 +136,9 @@ func (rMgr *RecoveryMgr) Checkpoint(ctx context.Context) (int32, error) {
 	if err != nil {
 		return -1, fmt.Errorf("could not end checkpoint: %w", err)
 	}
-	rMgr.lm.Flush(endLSN)
+	if err := rMgr.lm.Flush(endLSN); err != nil {
+		return -1, fmt.Errorf("could not flush checkpoint log: %w", err)
+	}
 
 	if err := rMgr.lm.WriteLastCheckpointLSN(beginLSN); err != nil {
 		return -1, fmt.Errorf("could not write last checkpoint LSN: %w", err)
@@ -279,7 +285,9 @@ func (rMgr *RecoveryMgr) doRollback(ctx context.Context, txAccess *access.Transa
 		if err != nil {
 			return -1, fmt.Errorf("could not write clr: %w", err)
 		}
-		rMgr.lm.Flush(clrLSN)
+		if err := rMgr.lm.Flush(clrLSN); err != nil {
+			return -1, fmt.Errorf("could not flush clr: %w", err)
+		}
 
 		if err := setRec.UndoPage(ctx, txAccess, clrLSN); err != nil {
 			return -1, fmt.Errorf("could not undo page: %w", err)
@@ -411,7 +419,9 @@ func (rMgr *RecoveryMgr) doRedoPhase(ctx context.Context, recovTxAccess *access.
 		recovAtTbl.removeTrx(txnum)
 	}
 	if maxEndLSN != -1 {
-		rMgr.lm.Flush(maxEndLSN)
+		if err := rMgr.lm.Flush(maxEndLSN); err != nil {
+			return fmt.Errorf("could not flush recovery end log: %w", err)
+		}
 	}
 
 	return nil
@@ -435,7 +445,9 @@ func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovTxAccess *access.
 			if err != nil {
 				return fmt.Errorf("could not abort: %w", err)
 			}
-			rMgr.lm.Flush(abortLSN)
+			if err := rMgr.lm.Flush(abortLSN); err != nil {
+				return fmt.Errorf("could not flush abort log: %w", err)
+			}
 			prevLastLSN = abortLSN
 		}
 
@@ -456,7 +468,9 @@ func (rMgr *RecoveryMgr) doUndoPhase(ctx context.Context, recovTxAccess *access.
 		recovAtTbl.removeTrx(txnum)
 	}
 	if maxEndLSN != -1 {
-		rMgr.lm.Flush(maxEndLSN)
+		if err := rMgr.lm.Flush(maxEndLSN); err != nil {
+			return fmt.Errorf("could not flush undo end log: %w", err)
+		}
 	}
 	return nil
 }

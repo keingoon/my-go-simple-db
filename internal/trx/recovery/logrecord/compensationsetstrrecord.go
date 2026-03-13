@@ -69,7 +69,10 @@ func (r *CompensationSetStrRecord) RedoPage(ctx context.Context, txAccess *acces
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyStr(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyStr(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }

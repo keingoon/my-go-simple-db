@@ -190,7 +190,9 @@ func (tx *Transaction) SetInt16(
 		lsn = loglsn
 	}
 	p := buff.Contents()
-	p.SetInt16(offset, val)
+	if err := p.SetInt16(offset, val); err != nil {
+		return fmt.Errorf("trx could not setint16 value on page: %w", err)
+	}
 	buff.SetModified(tx.txnum, lsn)
 	return nil
 }
@@ -216,7 +218,9 @@ func (tx *Transaction) SetInt32(
 		lsn = loglsn
 	}
 	p := buff.Contents()
-	p.SetInt32(offset, val)
+	if err := p.SetInt32(offset, val); err != nil {
+		return fmt.Errorf("trx could not setint32 value on page: %w", err)
+	}
 	buff.SetModified(tx.txnum, int32(lsn))
 	return nil
 }
@@ -242,7 +246,9 @@ func (tx *Transaction) SetStr(
 		lsn = loglsn
 	}
 	p := buff.Contents()
-	p.SetStr(offset, val)
+	if err := p.SetStr(offset, val); err != nil {
+		return fmt.Errorf("trx could not setstr value on page: %w", err)
+	}
 	buff.SetModified(tx.txnum, int32(lsn))
 	return nil
 }
@@ -268,7 +274,9 @@ func (tx *Transaction) SetBool(
 		lsn = loglsn
 	}
 	p := buff.Contents()
-	p.SetBool(offset, val)
+	if err := p.SetBool(offset, val); err != nil {
+		return fmt.Errorf("trx could not setbool value on page: %w", err)
+	}
 	buff.SetModified(tx.txnum, int32(lsn))
 	return nil
 }
@@ -294,7 +302,9 @@ func (tx *Transaction) SetDate(
 		lsn = loglsn
 	}
 	p := buff.Contents()
-	p.SetDate(offset, val)
+	if err := p.SetDate(offset, val); err != nil {
+		return fmt.Errorf("trx could not setdate value on page: %w", err)
+	}
 	buff.SetModified(tx.txnum, int32(lsn))
 	return nil
 }
@@ -309,7 +319,9 @@ func (tx *Transaction) ApplyInt16(
 ) error {
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
-	p.SetInt16(offset, val)
+	if err := p.SetInt16(offset, val); err != nil {
+		return fmt.Errorf("trx could not applyint16 value on page: %w", err)
+	}
 	buff.SetModified(txnum, lsn)
 	return nil
 }
@@ -324,7 +336,9 @@ func (tx *Transaction) ApplyInt32(
 ) error {
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
-	p.SetInt32(offset, val)
+	if err := p.SetInt32(offset, val); err != nil {
+		return fmt.Errorf("trx could not applyint32 value on page: %w", err)
+	}
 	buff.SetModified(txnum, lsn)
 	return nil
 }
@@ -339,7 +353,9 @@ func (tx *Transaction) ApplyStr(
 ) error {
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
-	p.SetStr(offset, val)
+	if err := p.SetStr(offset, val); err != nil {
+		return fmt.Errorf("trx could not applystr value on page: %w", err)
+	}
 	buff.SetModified(txnum, lsn)
 	return nil
 }
@@ -354,7 +370,9 @@ func (tx *Transaction) ApplyBool(
 ) error {
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
-	p.SetBool(offset, val)
+	if err := p.SetBool(offset, val); err != nil {
+		return fmt.Errorf("trx could not applybool value on page: %w", err)
+	}
 	buff.SetModified(txnum, lsn)
 	return nil
 }
@@ -369,7 +387,9 @@ func (tx *Transaction) ApplyDate(
 ) error {
 	buff := tx.mybuffers.GetBuffer(blk)
 	p := buff.Contents()
-	p.SetDate(offset, val)
+	if err := p.SetDate(offset, val); err != nil {
+		return fmt.Errorf("trx could not applydate value on page: %w", err)
+	}
 	buff.SetModified(txnum, lsn)
 	return nil
 }

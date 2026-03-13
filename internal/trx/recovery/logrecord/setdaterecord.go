@@ -66,7 +66,10 @@ func (r *SetDateRecord) UndoPage(ctx context.Context, txAccess *access.Transacti
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyDate(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
+	if err := txAccess.ApplyDate(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }
@@ -75,7 +78,10 @@ func (r *SetDateRecord) RedoPage(ctx context.Context, txAccess *access.Transacti
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyDate(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }

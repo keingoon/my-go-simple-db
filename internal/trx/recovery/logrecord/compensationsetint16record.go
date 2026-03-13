@@ -73,7 +73,10 @@ func (r *CompensationSetInt16Record) RedoPage(ctx context.Context, txAccess *acc
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyInt16(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }

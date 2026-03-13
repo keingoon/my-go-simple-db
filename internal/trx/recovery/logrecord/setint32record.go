@@ -63,7 +63,10 @@ func (r *SetInt32Record) UndoPage(ctx context.Context, txAccess *access.Transact
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyInt32(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal)
+	if err := txAccess.ApplyInt32(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }
@@ -72,7 +75,10 @@ func (r *SetInt32Record) RedoPage(ctx context.Context, txAccess *access.Transact
 	if err := txAccess.Pin(ctx, r.blk); err != nil {
 		return err
 	}
-	txAccess.ApplyInt32(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal)
+	if err := txAccess.ApplyInt32(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
 	txAccess.Unpin(ctx, r.blk)
 	return nil
 }
