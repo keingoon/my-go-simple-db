@@ -103,14 +103,30 @@ func WriteSetDateToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.Blo
 	newPos := oldPos + dateSize
 	rec := make([]byte, newPos+dateSize)
 	p := file.NewLogPage(rec)
-	p.SetInt32(0, setDate)
-	p.SetInt32(int32(prevPos), prevLSN)
-	p.SetInt32(int32(tPos), txnum)
-	p.SetStr(int32(fPos), blk.FileName())
-	p.SetInt32(int32(bPos), blk.Number())
-	p.SetInt32(int32(oPos), offset)
-	p.SetDate(int32(oldPos), oldVal)
-	p.SetDate(int32(newPos), newVal)
+	if err := p.SetInt32(0, setDate); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetStr(int32(fPos), blk.FileName()); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetInt32(int32(bPos), blk.Number()); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetInt32(int32(oPos), offset); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetDate(int32(oldPos), oldVal); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
+	if err := p.SetDate(int32(newPos), newVal); err != nil {
+		return -1, fmt.Errorf("could not encode set date record: %w", err)
+	}
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write date record to log: %w", err)

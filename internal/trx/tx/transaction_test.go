@@ -233,6 +233,22 @@ func TestTransaction_Persistence(t *testing.T) {
 				t.Errorf("expected buffer to be removed from mybuffers after unpin")
 			}
 		})
+
+		t.Run("Pin: 存在しないブロックを指定するとerrorを返す", func(t *testing.T) {
+			ctx := context.Background()
+			lockTbl := concurrency.NewLockTable()
+			atTbl := recovery.NewActiveTrxTable()
+			fm, lm, bm, dptTbl := initMgr(t, "")
+			wTx, err := NewTransactionMgr(lockTbl, fm, lm, bm, atTbl, dptTbl)
+			if err != nil {
+				t.Fatalf("failed to create NewTransactionMgr: %v", err)
+			}
+
+			blk := file.NewBlockId(filename, 0)
+			if err := wTx.Pin(ctx, blk); err == nil {
+				t.Fatal("Pinは失敗するべき")
+			}
+		})
 	})
 
 	t.Run("SetInt16/GetInt16: 書き込んだint16を別トランザクションで読み出せる", func(t *testing.T) {

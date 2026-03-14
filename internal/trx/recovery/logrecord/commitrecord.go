@@ -50,9 +50,15 @@ func WriteCommitToLog(lm *log.LogMgr, prevLSN int32, txnum int32) (int32, error)
 	tPos := prevPos + int32Size
 	rec := make([]byte, tPos+int32Size)
 	p := file.NewLogPage(rec)
-	p.SetInt32(0, commit)
-	p.SetInt32(int32(prevPos), prevLSN)
-	p.SetInt32(int32(tPos), txnum)
+	if err := p.SetInt32(0, commit); err != nil {
+		return -1, fmt.Errorf("could not encode commit record: %w", err)
+	}
+	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+		return -1, fmt.Errorf("could not encode commit record: %w", err)
+	}
+	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+		return -1, fmt.Errorf("could not encode commit record: %w", err)
+	}
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write commit record to log: %w", err)

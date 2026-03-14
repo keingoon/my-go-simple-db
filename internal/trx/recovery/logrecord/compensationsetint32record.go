@@ -90,15 +90,33 @@ func WriteCompensationSetInt32ToLog(lm *log.LogMgr, prevLSN int32, txnum int32, 
 	undoNextPos := newPos + int32Size
 	rec := make([]byte, undoNextPos+int32Size)
 	p := file.NewLogPage(rec)
-	p.SetInt32(0, compensationSetInt32)
-	p.SetInt32(int32(prevPos), prevLSN)
-	p.SetInt32(int32(tPos), txnum)
-	p.SetStr(int32(fPos), blk.FileName())
-	p.SetInt32(int32(bPos), blk.Number())
-	p.SetInt32(int32(oPos), offset)
-	p.SetInt32(int32(oldPos), oldVal)
-	p.SetInt32(int32(newPos), newVal)
-	p.SetInt32(int32(undoNextPos), undoNextLSN)
+	if err := p.SetInt32(0, compensationSetInt32); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetStr(int32(fPos), blk.FileName()); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(bPos), blk.Number()); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(oPos), offset); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(oldPos), oldVal); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(newPos), newVal); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
+	if err := p.SetInt32(int32(undoNextPos), undoNextLSN); err != nil {
+		return -1, fmt.Errorf("could not encode compensation set int32 record: %w", err)
+	}
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write compensation set int32 record to log: %w", err)

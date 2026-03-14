@@ -133,6 +133,16 @@ func TestTransaction(t *testing.T) {
 		}
 	})
 
+	t.Run("Pin: 存在しないブロックを指定するとerrorを返す", func(t *testing.T) {
+		ctx := context.Background()
+		_, _, _, tx := initTx(t, concurrency.NewLockTable(), 100)
+
+		blk := file.NewBlockId(filename, 0)
+		if err := tx.Pin(ctx, blk); err == nil {
+			t.Fatal("Pinは失敗するべき")
+		}
+	})
+
 	t.Run("SetInt16/GetInt16: 書き込んだint16を読み出せる", func(t *testing.T) {
 		ctx := context.Background()
 		fm, _, _, tx := initTx(t, concurrency.NewLockTable(), 2)

@@ -36,7 +36,9 @@ func (r *CheckpointBeginRecord) String() string {
 func WriteCheckpointBeginToLog(lm *log.LogMgr) (int32, error) {
 	rec := make([]byte, int32Size)
 	p := file.NewLogPage(rec)
-	p.SetInt32(0, checkpointBegin)
+	if err := p.SetInt32(0, checkpointBegin); err != nil {
+		return -1, fmt.Errorf("could not encode checkpoint begin record: %w", err)
+	}
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write checkpoint record to log: %w", err)

@@ -521,6 +521,17 @@ func TestRecoveryMgr(t *testing.T) {
 				}
 			})
 		})
+
+		t.Run("ATTに対象トランザクションが無い場合は失敗する", func(t *testing.T) {
+			ctx := context.Background()
+			_, _, _, _, rm, atTbl, _ := initRecoveryEnv(t, 999)
+
+			atTbl.removeTrx(rm.txnum)
+
+			if _, err := rm.Commit(ctx); err == nil {
+				t.Fatal("Commitは失敗するべき")
+			}
+		})
 	})
 
 	t.Run("Rollback", func(t *testing.T) {

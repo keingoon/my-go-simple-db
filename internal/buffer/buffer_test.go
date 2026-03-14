@@ -540,4 +540,23 @@ func TestBufferMgr(t *testing.T) {
 			t.Errorf("FlushAll後のDirtyPageのblk2のEntryが存在するべきだが存在しない")
 		}
 	})
+
+	t.Run("BufferMgr: FlushAll(tx)が失敗した場合はBuffer状態とDirtyPageを維持する", func(t *testing.T) {
+		t.Parallel()
+		f := setupFlushAll(t)
+
+		f.b1.SetModified(f.tx1, f.lsn1)
+		f.dpt.MarkDirty(f.blk1, f.lsn1)
+		f.b1.blk = file.NewBlockId(f.blk1.FileName(), -1)
+
+		if err := f.mgr.FlushAll(f.ctx, f.tx1); err == nil {
+			t.Fatal("FlushAllは失敗するべき")
+		}
+		if got := f.b1.ModifyingTx(); got != f.tx1 {
+			t.Fatalf("失敗時もModifyingTxは維持されるべきだが got=%v", got)
+		}
+		if _, ok := f.dpt.GetPage(f.blk1); !ok {
+			t.Fatal("失敗時もDirtyPageのentryは残るべき")
+		}
+	})
 }

@@ -1,6 +1,7 @@
 package logrecord
 
 import (
+	"context"
 	"maps"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
+	"github.com/keingoon/simpledb/internal/trx/concurrency"
 )
 
 const (
@@ -54,6 +57,15 @@ func readBack(t *testing.T, lm *log.LogMgr, lsn int32) []byte {
 		t.Fatalf("ReadRecordAt(lsn=%d) failed: %v", lsn, err)
 	}
 	return bytes
+}
+
+func newRecoveryTxAccess(t *testing.T) (*file.FileMgr, *access.Transaction) {
+	t.Helper()
+	fm, lm := newLogMgr(t)
+	dpt := buffer.NewDirtyPageTable()
+	bm := buffer.NewBufferMgr(fm, lm, 4, 4, dpt)
+	txAccess := access.NewRecoveryTransaction(concurrency.NewLockTable(), fm, lm, bm)
+	return fm, txAccess
 }
 
 func TestLogRecord(t *testing.T) {
@@ -600,13 +612,13 @@ func TestLogRecord(t *testing.T) {
 				t.Fatalf("expected not nil")
 			}
 
-		t.Run("Opはstartである", func(t *testing.T) {
-			if rec.Op() != start {
+			t.Run("Opはstartである", func(t *testing.T) {
+				if rec.Op() != start {
 					t.Errorf("Opが一致しない: want=%d got=%d", start, rec.Op())
-			}
-		})
-		t.Run("PrevLSNは-1である", func(t *testing.T) {
-			if rec.PrevLSN() != -1 {
+				}
+			})
+			t.Run("PrevLSNは-1である", func(t *testing.T) {
+				if rec.PrevLSN() != -1 {
 					t.Errorf("PrevLSNが一致しない: want=%d got=%d", -1, rec.PrevLSN())
 				}
 			})
@@ -1179,6 +1191,44 @@ func TestLogRecord(t *testing.T) {
 					t.Fatalf("UndoNextLSNが一致しない: want=%d got=%d", undoNextLSN, r.UndoNextLSN())
 				}
 			})
+		})
+
+		t.Run("SetInt32Record.UndoPage: Pinに失敗した場合はerrorを返す", func(t *testing.T) {
+			_, txAccess := newRecoveryTxAccess(t)
+			rec := &SetInt32Record{
+				lsn:     10,
+				prevLSN: 9,
+				txnum:   1,
+				blk:     file.NewBlockId(datafile, 0),
+				offset:  8,
+				oldVal:  100,
+				newVal:  200,
+			}
+
+			if err := rec.UndoPage(context.Background(), txAccess, 11); err == nil {
+				t.Fatal("UndoPageは失敗するべき")
+			}
+		})
+
+		t.Run("SetStrRecord.RedoPage: ページ更新できない場合はerrorを返す", func(t *testing.T) {
+			fm, txAccess := newRecoveryTxAccess(t)
+			blk, err := fm.Append(datafile)
+			if err != nil {
+				t.Fatalf("append block failed: %v", err)
+			}
+			rec := &SetStrRecord{
+				lsn:     10,
+				prevLSN: 9,
+				txnum:   1,
+				blk:     blk,
+				offset:  blocksize - 1,
+				oldVal:  "old",
+				newVal:  "new",
+			}
+
+			if err := rec.RedoPage(context.Background(), txAccess); err == nil {
+				t.Fatal("RedoPageは失敗するべき")
+			}
 		})
 	})
 }

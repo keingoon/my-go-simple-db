@@ -47,9 +47,15 @@ func WriteStartToLog(lm *log.LogMgr, txnum int32) (int32, error) {
 	tPos := prevPos + int32Size
 	rec := make([]byte, tPos+int32Size)
 	p := file.NewLogPage(rec)
-	p.SetInt32(0, start)
-	p.SetInt32(int32(prevPos), -1)
-	p.SetInt32(int32(tPos), txnum)
+	if err := p.SetInt32(0, start); err != nil {
+		return -1, fmt.Errorf("could not encode start record: %w", err)
+	}
+	if err := p.SetInt32(int32(prevPos), -1); err != nil {
+		return -1, fmt.Errorf("could not encode start record: %w", err)
+	}
+	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+		return -1, fmt.Errorf("could not encode start record: %w", err)
+	}
 	lsn, err := lm.Append(rec)
 	if err != nil {
 		return -1, fmt.Errorf("could not write start record to log: %w", err)
