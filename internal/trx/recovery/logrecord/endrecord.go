@@ -41,20 +41,17 @@ func (r *EndRecord) String() string {
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32]
 func WriteEndToLog(lm *log.LogMgr, prevLSN int32, txnum int32) (int32, error) {
-	prevPos := int32Size
-	tPos := prevPos + int32Size
-	rec := make([]byte, tPos+int32Size)
-	p := file.NewLogPage(rec)
-	if err := p.SetInt32(0, end); err != nil {
+	enc := newRecordEncoder(int32Size * 3)
+	if err := enc.PutInt32(end); err != nil {
 		return -1, fmt.Errorf("could not encode end record: %w", err)
 	}
-	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+	if err := enc.PutInt32(prevLSN); err != nil {
 		return -1, fmt.Errorf("could not encode end record: %w", err)
 	}
-	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+	if err := enc.PutInt32(txnum); err != nil {
 		return -1, fmt.Errorf("could not encode end record: %w", err)
 	}
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write end record to log: %w", err)
 	}

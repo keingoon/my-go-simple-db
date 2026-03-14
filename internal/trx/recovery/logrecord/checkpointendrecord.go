@@ -117,63 +117,47 @@ func WriteCheckpointEndToLog(lm *log.LogMgr, beginLSN int32, attSnapShot map[int
 		total += int32Size                     // recLSN
 	}
 
-	rec := make([]byte, total)
-	p := file.NewLogPage(rec)
-	offset := int32(0)
+	enc := newRecordEncoder(total)
 
-	if err := p.SetInt32(offset, checkpointEnd); err != nil {
-		return -1, err
+	if err := enc.PutInt32(checkpointEnd); err != nil {
+		return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 	}
-	offset += int32Size
-	if err := p.SetInt32(offset, beginLSN); err != nil {
-		return -1, err
+	if err := enc.PutInt32(beginLSN); err != nil {
+		return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 	}
-	offset += int32Size
 
 	// ATT section
-	if err := p.SetInt32(offset, attCount); err != nil {
-		return -1, err
+	if err := enc.PutInt32(attCount); err != nil {
+		return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 	}
-	offset += int32Size
 	for txId, entry := range attSnapShot {
-		if err := p.SetInt32(offset, txId); err != nil {
-			return -1, err
+		if err := enc.PutInt32(txId); err != nil {
+			return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 		}
-		offset += int32Size
-		if err := p.SetInt32(offset, entry.Status); err != nil {
-			return -1, err
+		if err := enc.PutInt32(entry.Status); err != nil {
+			return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 		}
-		offset += int32Size
-		if err := p.SetInt32(offset, entry.LastLSN); err != nil {
-			return -1, err
+		if err := enc.PutInt32(entry.LastLSN); err != nil {
+			return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 		}
-		offset += int32Size
 	}
 
 	// DPT section
 	dptCount := int32(len(dptSnapShot))
-	if err := p.SetInt32(offset, dptCount); err != nil {
-		return -1, err
+	if err := enc.PutInt32(dptCount); err != nil {
+		return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 	}
-	offset += int32Size
 	for blk, dptEntry := range dptSnapShot {
 		b := blk // value copy
-		fname := (&b).FileName()
-		if err := p.SetStr(offset, fname); err != nil {
-			return -1, err
+		if err := enc.PutBlock(&b); err != nil {
+			return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 		}
-		offset += int32Size + int32(len(fname))
-		if err := p.SetInt32(offset, (&b).Number()); err != nil {
-			return -1, err
+		if err := enc.PutInt32(dptEntry.GetRecLSN()); err != nil {
+			return -1, fmt.Errorf("could not encode checkpoint end record: %w", err)
 		}
-		offset += int32Size
-		if err := p.SetInt32(offset, dptEntry.GetRecLSN()); err != nil {
-			return -1, err
-		}
-		offset += int32Size
 	}
 
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write checkpoint end to log: %w", err)
 	}

@@ -83,44 +83,33 @@ func (r *CompensationSetDateRecord) RedoPage(ctx context.Context, txAccess *acce
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:time.Time][newVal:time.Time][undoNextLSN:int32]
 func WriteCompensationSetDateToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal time.Time, newVal time.Time, undoNextLSN int32) (int32, error) {
-	prevPos := int32Size
-	tPos := prevPos + int32Size
-	fPos := tPos + int32Size
-	bPos := fPos + file.VarBytesLen(len(blk.FileName()))
-	oPos := bPos + int32Size
-	oldPos := oPos + int32Size
-	newPos := oldPos + dateSize
-	undoNextPos := newPos + dateSize
-	rec := make([]byte, undoNextPos+int32Size)
-	p := file.NewLogPage(rec)
-	if err := p.SetInt32(0, compensationSetDate); err != nil {
+	recLen := int32Size + int32Size + int32Size + int32(file.VarBytesLen(len(blk.FileName()))) + int32Size + int32Size + dateSize + dateSize + int32Size
+	enc := newRecordEncoder(recLen)
+	if err := enc.PutInt32(compensationSetDate); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+	if err := enc.PutInt32(prevLSN); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+	if err := enc.PutInt32(txnum); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetStr(int32(fPos), blk.FileName()); err != nil {
+	if err := enc.PutBlock(blk); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetInt32(int32(bPos), blk.Number()); err != nil {
+	if err := enc.PutInt32(offset); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetInt32(int32(oPos), offset); err != nil {
+	if err := enc.PutDate(oldVal); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetDate(int32(oldPos), oldVal); err != nil {
+	if err := enc.PutDate(newVal); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetDate(int32(newPos), newVal); err != nil {
+	if err := enc.PutInt32(undoNextLSN); err != nil {
 		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
 	}
-	if err := p.SetInt32(int32(undoNextPos), undoNextLSN); err != nil {
-		return -1, fmt.Errorf("could not encode compensation set date record: %w", err)
-	}
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write compensation set date record to log: %w", err)
 	}

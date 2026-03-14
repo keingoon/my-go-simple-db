@@ -91,40 +91,30 @@ func (r *SetInt32Record) WriteCLR(ctx context.Context, txAccess *access.Transact
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:int32][newVal:int32]
 func WriteSetInt32ToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal int32, newVal int32) (int32, error) {
-	prevPos := int32Size
-	tPos := prevPos + int32Size
-	fPos := tPos + int32Size
-	bPos := fPos + file.VarBytesLen(len(blk.FileName()))
-	oPos := bPos + int32Size
-	oldPos := oPos + int32Size
-	newPos := oldPos + int32Size
-	rec := make([]byte, newPos+int32Size)
-	p := file.NewLogPage(rec)
-	if err := p.SetInt32(0, setInt32); err != nil {
+	recLen := int32Size + int32Size + int32Size + int32(file.VarBytesLen(len(blk.FileName()))) + int32Size + int32Size + int32Size + int32Size
+	enc := newRecordEncoder(recLen)
+	if err := enc.PutInt32(setInt32); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+	if err := enc.PutInt32(prevLSN); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+	if err := enc.PutInt32(txnum); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetStr(int32(fPos), blk.FileName()); err != nil {
+	if err := enc.PutBlock(blk); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(bPos), blk.Number()); err != nil {
+	if err := enc.PutInt32(offset); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(oPos), offset); err != nil {
+	if err := enc.PutInt32(oldVal); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(oldPos), oldVal); err != nil {
+	if err := enc.PutInt32(newVal); err != nil {
 		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
 	}
-	if err := p.SetInt32(int32(newPos), newVal); err != nil {
-		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
-	}
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write int32 record to log: %w", err)
 	}

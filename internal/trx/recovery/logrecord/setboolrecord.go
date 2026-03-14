@@ -92,40 +92,30 @@ func (r *SetBoolRecord) RedoPage(ctx context.Context, txAccess *access.Transacti
 // Layout:
 // [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:bool][newVal:bool]
 func WriteSetBoolToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal bool, newVal bool) (int32, error) {
-	prevPos := int32Size
-	tPos := prevPos + int32Size
-	fPos := tPos + int32Size
-	bPos := fPos + file.VarBytesLen(len(blk.FileName()))
-	oPos := bPos + int32Size
-	oldPos := oPos + int32Size
-	newPos := oldPos + boolSize
-	rec := make([]byte, newPos+boolSize)
-	p := file.NewLogPage(rec)
-	if err := p.SetInt32(0, setBool); err != nil {
+	recLen := int32Size + int32Size + int32Size + int32(file.VarBytesLen(len(blk.FileName()))) + int32Size + int32Size + boolSize + boolSize
+	enc := newRecordEncoder(recLen)
+	if err := enc.PutInt32(setBool); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetInt32(int32(prevPos), prevLSN); err != nil {
+	if err := enc.PutInt32(prevLSN); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetInt32(int32(tPos), txnum); err != nil {
+	if err := enc.PutInt32(txnum); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetStr(int32(fPos), blk.FileName()); err != nil {
+	if err := enc.PutBlock(blk); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetInt32(int32(bPos), blk.Number()); err != nil {
+	if err := enc.PutInt32(offset); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetInt32(int32(oPos), offset); err != nil {
+	if err := enc.PutBool(oldVal); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetBool(int32(oldPos), oldVal); err != nil {
+	if err := enc.PutBool(newVal); err != nil {
 		return -1, fmt.Errorf("could not encode set bool record: %w", err)
 	}
-	if err := p.SetBool(int32(newPos), newVal); err != nil {
-		return -1, fmt.Errorf("could not encode set bool record: %w", err)
-	}
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write bool record to log: %w", err)
 	}

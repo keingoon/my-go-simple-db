@@ -3,7 +3,6 @@ package logrecord
 import (
 	"fmt"
 
-	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/log"
 )
 
@@ -34,12 +33,11 @@ func (r *CheckpointBeginRecord) String() string {
 // Layout:
 // [op:int32]
 func WriteCheckpointBeginToLog(lm *log.LogMgr) (int32, error) {
-	rec := make([]byte, int32Size)
-	p := file.NewLogPage(rec)
-	if err := p.SetInt32(0, checkpointBegin); err != nil {
+	enc := newRecordEncoder(int32Size)
+	if err := enc.PutInt32(checkpointBegin); err != nil {
 		return -1, fmt.Errorf("could not encode checkpoint begin record: %w", err)
 	}
-	lsn, err := lm.Append(rec)
+	lsn, err := lm.Append(enc.Bytes())
 	if err != nil {
 		return -1, fmt.Errorf("could not write checkpoint record to log: %w", err)
 	}
