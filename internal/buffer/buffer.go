@@ -37,12 +37,15 @@ func (buff *Buffer) Block() *file.BlockId {
 
 func (buff *Buffer) SetModified(txnum int32, lsn int32) {
 	buff.txnum = txnum
-	if lsn > 0 {
-		buff.contents.SetPageLSN(lsn)
-		buff.pageLSN = lsn
+	if lsn <= 0 {
+		return
 	}
+	buff.contents.SetPageLSN(lsn)
+	buff.pageLSN = lsn
+
 	if buff.recLSN == -1 {
 		buff.recLSN = lsn
+		buff.dpt.MarkDirty(buff.blk, lsn)
 	}
 }
 

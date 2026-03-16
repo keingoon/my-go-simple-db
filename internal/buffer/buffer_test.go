@@ -96,6 +96,9 @@ func TestBuffer(t *testing.T) {
 		const (
 			blocksize = int32(256)
 			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
 			txnum     = int32(1)
 		)
 		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
@@ -103,7 +106,17 @@ func TestBuffer(t *testing.T) {
 			t.Fatal(err)
 		}
 		dpt := NewDirtyPageTable()
-		b := NewBuffer(fm, lm, dpt)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
 
 		b.SetModified(txnum, -1)
 		if got := b.ModifyingTx(); got != txnum {
@@ -116,6 +129,9 @@ func TestBuffer(t *testing.T) {
 		const (
 			blocksize = int32(256)
 			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
 			txnum     = int32(1)
 			lsn       = int32(10)
 		)
@@ -124,7 +140,17 @@ func TestBuffer(t *testing.T) {
 			t.Fatal(err)
 		}
 		dpt := NewDirtyPageTable()
-		b := NewBuffer(fm, lm, dpt)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != lsn {
@@ -137,6 +163,9 @@ func TestBuffer(t *testing.T) {
 		const (
 			blocksize = int32(256)
 			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
 			txnum     = int32(1)
 			lsn       = int32(-2)
 		)
@@ -145,11 +174,157 @@ func TestBuffer(t *testing.T) {
 			t.Fatal(err)
 		}
 		dpt := NewDirtyPageTable()
-		b := NewBuffer(fm, lm, dpt)
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
 
 		b.SetModified(txnum, lsn)
 		if got := b.Contents().GetPageLSN(); got != 0 {
 			t.Errorf("pageLSNは更新されず0のままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("Buffer: SetModifiedは負のLSNではrecLSNを更新しない", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+			txnum     = int32(1)
+			lsn       = int32(-2)
+		)
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
+
+		b.SetModified(txnum, lsn)
+		if got := b.recLSN; got != -1 {
+			t.Errorf("recLSNは更新されず-1のままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("Buffer: SetModifiedは負のLSNではdirtyPageTableのrecLSNを更新しない", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+			txnum     = int32(1)
+			lsn       = int32(-2)
+		)
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
+
+		b.SetModified(txnum, lsn)
+		if got, _ := dpt.GetRecLSN(b.Block()); got != -1 {
+			t.Errorf("recLSNは更新されず-1のままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("Buffer: bufferが未変更の場合SetModifiedはrecLSNを更新する", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+			txnum     = int32(1)
+			lsn       = int32(10)
+		)
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
+
+		b.SetModified(txnum, lsn)
+		if got := b.recLSN; got != lsn {
+			t.Errorf("recLSNは%vであるべきだが%vだった", lsn, got)
+		}
+	})
+
+	t.Run("Buffer: bufferが未変更の場合SetModifiedはdirtyPageTableのrecLSNを更新する", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+			txnum     = int32(1)
+			lsn       = int32(10)
+		)
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := context.Background()
+		b, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Unpin(ctx, b)
+
+		b.SetModified(txnum, lsn)
+		if got, _ := dpt.GetRecLSN(b.Block()); got != lsn {
+			t.Errorf("recLSNは%vであるべきだが%vだった", lsn, got)
 		}
 	})
 }
@@ -420,7 +595,6 @@ func TestBufferMgr(t *testing.T) {
 		b1p.SetInt32(0, 1)
 		b1p.SetStr(int32Size, "record1")
 		f.b1.SetModified(f.tx1, f.lsn1)
-		f.dpt.MarkDirty(f.blk1, f.lsn1)
 
 		f.logrec2 = createLogRec(2, "record2")
 		f.lsn2, err = f.lm.Append(f.logrec2)
@@ -431,7 +605,6 @@ func TestBufferMgr(t *testing.T) {
 		b2p.SetInt32(0, 2)
 		b2p.SetStr(int32Size, "record2")
 		f.b2.SetModified(f.tx2, f.lsn2)
-		f.dpt.MarkDirty(f.blk2, f.lsn2)
 
 		f.mgr.FlushAll(f.ctx, f.tx1)
 		return f
@@ -517,6 +690,14 @@ func TestBufferMgr(t *testing.T) {
 		}
 	})
 
+	t.Run("BufferMgr: FlushAll(tx)後に該当txのBufferのrecLSNは-1になる", func(t *testing.T) {
+		t.Parallel()
+		f := setupFlushAll(t)
+		if got := f.b1.recLSN; got != -1 {
+			t.Errorf("FlushAll後のb1 recLSNは-1であるべきだが%vだった", got)
+		}
+	})
+
 	t.Run("BufferMgr: FlushAll(tx)後も別txのBufferのModifyingTxは変わらない", func(t *testing.T) {
 		t.Parallel()
 		f := setupFlushAll(t)
@@ -546,7 +727,6 @@ func TestBufferMgr(t *testing.T) {
 		f := setupFlushAll(t)
 
 		f.b1.SetModified(f.tx1, f.lsn1)
-		f.dpt.MarkDirty(f.blk1, f.lsn1)
 		f.b1.blk = file.NewBlockId(f.blk1.FileName(), -1)
 
 		if err := f.mgr.FlushAll(f.ctx, f.tx1); err == nil {
