@@ -3,6 +3,7 @@ package buffer
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -94,6 +95,10 @@ func (buff *Buffer) pin() {
 
 func (buff *Buffer) unpin() {
 	buff.pins -= 1
+}
+
+func (buff *Buffer) isDirty() bool {
+	return buff.blk != nil && buff.txnum >= 0 && buff.recLSN > 0
 }
 
 type LRUBufferItem struct {
@@ -293,4 +298,76 @@ func (buffMgr *BufferMgr) findExistingBuffer(blk *file.BlockId) *Buffer {
 		return buff
 	}
 	return nil
+}
+
+type dirtyBufferCandidate struct {
+	buff   *Buffer
+	recLSN int32
+}
+
+func (buffMgr *BufferMgr) getDirtyBufferCandidates() []*dirtyBufferCandidate {
+	candidates := make([]*dirtyBufferCandidate, 0, len(buffMgr.bufferpool))
+	for _, buff := range buffMgr.bufferpool {
+		if buff == nil {
+			continue
+		}
+		if buff.IsPinned() {
+			continue
+		}
+		if !buff.isDirty() {
+			continue
+		}
+		candidates = append(candidates, &dirtyBufferCandidate{
+			buff:   buff,
+			recLSN: buff.recLSN,
+		})
+	}
+	return candidates
+}
+
+func (buffMgr *BufferMgr) FlushPage(ctx context.Context, blk *file.BlockId) (bool, error) {
+	buffMgr.mu.Lock()
+	defer buffMgr.mu.Unlock()
+
+	buff := buffMgr.findExistingBuffer(blk)
+	if buff == nil {
+		return false, nil
+	}
+	if buff.IsPinned() {
+		return false, nil
+	}
+	if !buff.isDirty() {
+		return false, nil
+	}
+	if err := buff.flush(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (buffMgr *BufferMgr) FlushDirtyPages(ctx context.Context, limit int32) (int32, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+
+	buffMgr.mu.Lock()
+	defer buffMgr.mu.Unlock()
+
+	candidates := buffMgr.getDirtyBufferCandidates()
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].recLSN < candidates[j].recLSN
+	})
+
+	flushed := int32(0)
+	for _, candidate := range candidates {
+		if flushed >= limit {
+			break
+		}
+		if err := candidate.buff.flush(); err != nil {
+			return flushed, err
+		}
+		flushed += 1
+	}
+	return flushed, nil
 }

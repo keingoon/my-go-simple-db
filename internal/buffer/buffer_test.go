@@ -36,6 +36,16 @@ func createLogRec(i int32, str string) []byte {
 	return rec
 }
 
+func readPageFromDisk(t *testing.T, fm *file.FileMgr, blk *file.BlockId) *file.Page {
+	t.Helper()
+
+	p := file.NewPage(fm.BlockSize())
+	if err := fm.Read(blk, p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestBuffer(t *testing.T) {
 	t.Parallel()
 
@@ -609,6 +619,482 @@ func TestBufferMgr(t *testing.T) {
 		f.mgr.FlushAll(f.ctx, f.tx1)
 		return f
 	}
+
+	t.Run("BufferMgr: FlushPageはdirtyな対象ページをflushする", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize    = int32(256)
+			logfile      = "logfile"
+			filename     = "testfile"
+			numbuffs     = int32(2)
+			numwaits     = int32(2)
+			txnum        = int32(1)
+			wantInt32    = int32(1)
+			wantStr      = "record1"
+			targetOffset = int32(0)
+		)
+		ctx := context.Background()
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec := createLogRec(wantInt32, wantStr)
+		lsn, err := lm.Append(logrec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := buff.Contents()
+		p.SetInt32(targetOffset, wantInt32)
+		p.SetStr(int32Size, wantStr)
+		buff.SetModified(txnum, lsn)
+		mgr.Unpin(ctx, buff)
+
+		flushed, err := mgr.FlushPage(ctx, blk)
+		if err != nil {
+			t.Fatalf("FlushPageが失敗した: %v", err)
+		}
+		if !flushed {
+			t.Fatal("dirtyな対象ページはflushされるべき")
+		}
+
+		onDiskPage := readPageFromDisk(t, fm, blk)
+		if got := onDiskPage.GetInt32(targetOffset); got != wantInt32 {
+			t.Errorf("blk1 int32(0)は%vであるべきだが%vだった", wantInt32, got)
+		}
+		if got := onDiskPage.GetStr(int32Size); got != wantStr {
+			t.Errorf("blk1 str(%d)は%qであるべきだが%qだった", int32Size, wantStr, got)
+		}
+		if got := onDiskPage.GetPageLSN(); got != lsn {
+			t.Errorf("blk1 pageLSNは%vであるべきだが%vだった", lsn, got)
+		}
+	})
+
+	t.Run("BufferMgr: FlushPageはbuffer poolに存在しないページではfalse,nilを返す", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+		)
+		ctx := context.Background()
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+		blkInBufferPool, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff, err := mgr.Pin(ctx, blkInBufferPool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec := createLogRec(1, "record1")
+		lsn, err := lm.Append(logrec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff.Contents().SetInt32(0, 1)
+		buff.Contents().SetStr(int32Size, "record1")
+		buff.SetModified(1, lsn)
+
+		missingBlk, err := fm.Append("missingfile")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		flushed, err := mgr.FlushPage(ctx, missingBlk)
+		if err != nil {
+			t.Fatalf("FlushPageは失敗しないべきだが%vだった", err)
+		}
+		if flushed {
+			t.Fatal("buffer poolに存在しないページはflushされるべきではない")
+		}
+	})
+
+	t.Run("BufferMgr: FlushPageはpinnedなページをflushしない", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize = int32(256)
+			logfile   = "logfile"
+			filename  = "testfile"
+			numbuffs  = int32(2)
+			numwaits  = int32(2)
+			txnum     = int32(1)
+			wantInt32 = int32(1)
+			wantStr   = "record1"
+		)
+		ctx := context.Background()
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+		blk, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff, err := mgr.Pin(ctx, blk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec := createLogRec(wantInt32, wantStr)
+		lsn, err := lm.Append(logrec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff.Contents().SetInt32(0, wantInt32)
+		buff.Contents().SetStr(int32Size, wantStr)
+		buff.SetModified(txnum, lsn)
+
+		flushed, err := mgr.FlushPage(ctx, blk)
+		if err != nil {
+			t.Fatalf("FlushPageは失敗しないべきだが%vだった", err)
+		}
+		if flushed {
+			t.Fatal("pinnedなページはflushされるべきではない")
+		}
+		if got := buff.recLSN; got != lsn {
+			t.Errorf("pinnedページのrecLSNは%vのままであるべきだが%vだった", lsn, got)
+		}
+		if _, ok := dpt.GetPage(blk); !ok {
+			t.Fatal("pinnedページのDPT entryは残るべき")
+		}
+	})
+
+	t.Run("BufferMgr: FlushDirtyPagesはrecLSNの小さい順にflushする", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize             = int32(256)
+			logfile               = "logfile"
+			filename              = "testfile"
+			numbuffs              = int32(2)
+			numwaits              = int32(2)
+			firstTxnum            = int32(1)
+			secondTxnum           = int32(2)
+			firstWantInt32        = int32(1)
+			secondWantInt32       = int32(2)
+			firstWantStr          = "record1"
+			secondWantStr         = "record2"
+			wantInitialOnDiskInt32 = int32(0)
+		)
+		ctx := context.Background()
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+		blk1, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff1, err := mgr.Pin(ctx, blk1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec1 := createLogRec(firstWantInt32, firstWantStr)
+		lsn1, err := lm.Append(logrec1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff1.Contents().SetInt32(0, firstWantInt32)
+		buff1.Contents().SetStr(int32Size, firstWantStr)
+		buff1.SetModified(firstTxnum, lsn1)
+		mgr.Unpin(ctx, buff1)
+
+		blk2, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff2, err := mgr.Pin(ctx, blk2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec2 := createLogRec(secondWantInt32, secondWantStr)
+		lsn2, err := lm.Append(logrec2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff2.Contents().SetInt32(0, secondWantInt32)
+		buff2.Contents().SetStr(int32Size, secondWantStr)
+		buff2.SetModified(secondTxnum, lsn2)
+		mgr.Unpin(ctx, buff2)
+
+		flushed, err := mgr.FlushDirtyPages(ctx, 1)
+		if err != nil {
+			t.Fatalf("FlushDirtyPagesが失敗した: %v", err)
+		}
+		if flushed != 1 {
+			t.Fatalf("flush件数は1であるべきだが%vだった", flushed)
+		}
+
+		page1OnDisk := readPageFromDisk(t, fm, blk1)
+		if got := page1OnDisk.GetInt32(0); got != firstWantInt32 {
+			t.Errorf("最小recLSNのページはint32(0)=%vであるべきだが%vだった", firstWantInt32, got)
+		}
+
+		page2OnDisk := readPageFromDisk(t, fm, blk2)
+		if got := page2OnDisk.GetInt32(0); got != wantInitialOnDiskInt32 {
+			t.Errorf("後続ページは未flushなのでint32(0)=%vであるべきだが%vだった", wantInitialOnDiskInt32, got)
+		}
+	})
+
+	t.Run("BufferMgr: FlushDirtyPagesはlimit件だけflushする", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blocksize              = int32(256)
+			logfile                = "logfile"
+			filename               = "testfile"
+			numbuffs               = int32(3)
+			numwaits               = int32(3)
+			firstTxnum             = int32(1)
+			secondTxnum            = int32(2)
+			thirdTxnum             = int32(3)
+			firstWantInt32         = int32(1)
+			secondWantInt32        = int32(2)
+			thirdWantInt32         = int32(3)
+			firstWantStr           = "record1"
+			secondWantStr          = "record2"
+			thirdWantStr           = "record3"
+			wantInitialOnDiskInt32 = int32(0)
+		)
+		ctx := context.Background()
+
+		fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dpt := NewDirtyPageTable()
+		mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+		blk1, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff1, err := mgr.Pin(ctx, blk1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec1 := createLogRec(firstWantInt32, firstWantStr)
+		lsn1, err := lm.Append(logrec1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff1.Contents().SetInt32(0, firstWantInt32)
+		buff1.Contents().SetStr(int32Size, firstWantStr)
+		buff1.SetModified(firstTxnum, lsn1)
+		mgr.Unpin(ctx, buff1)
+
+		blk2, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff2, err := mgr.Pin(ctx, blk2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec2 := createLogRec(secondWantInt32, secondWantStr)
+		lsn2, err := lm.Append(logrec2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff2.Contents().SetInt32(0, secondWantInt32)
+		buff2.Contents().SetStr(int32Size, secondWantStr)
+		buff2.SetModified(secondTxnum, lsn2)
+		mgr.Unpin(ctx, buff2)
+
+		blk3, err := fm.Append(filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff3, err := mgr.Pin(ctx, blk3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logrec3 := createLogRec(thirdWantInt32, thirdWantStr)
+		lsn3, err := lm.Append(logrec3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buff3.Contents().SetInt32(0, thirdWantInt32)
+		buff3.Contents().SetStr(int32Size, thirdWantStr)
+		buff3.SetModified(thirdTxnum, lsn3)
+		mgr.Unpin(ctx, buff3)
+
+		flushed, err := mgr.FlushDirtyPages(ctx, 2)
+		if err != nil {
+			t.Fatalf("FlushDirtyPagesが失敗した: %v", err)
+		}
+		if flushed != 2 {
+			t.Fatalf("flush件数は2であるべきだが%vだった", flushed)
+		}
+
+		page1OnDisk := readPageFromDisk(t, fm, blk1)
+		if got := page1OnDisk.GetInt32(0); got != firstWantInt32 {
+			t.Errorf("1件目はflushされるのでint32(0)=%vであるべきだが%vだった", firstWantInt32, got)
+		}
+
+		page2OnDisk := readPageFromDisk(t, fm, blk2)
+		if got := page2OnDisk.GetInt32(0); got != secondWantInt32 {
+			t.Errorf("2件目はflushされるのでint32(0)=%vであるべきだが%vだった", secondWantInt32, got)
+		}
+
+		page3OnDisk := readPageFromDisk(t, fm, blk3)
+		if got := page3OnDisk.GetInt32(0); got != wantInitialOnDiskInt32 {
+			t.Errorf("3件目は未flushなのでint32(0)=%vであるべきだが%vだった", wantInitialOnDiskInt32, got)
+		}
+	})
+
+	t.Run("BufferMgr: FlushDirtyPagesはlimitが0以下なら0,nilを返す", func(t *testing.T) {
+		t.Parallel()
+		t.Run("limitが0のとき0,nilを返す", func(t *testing.T) {
+			const (
+				blocksize = int32(256)
+				logfile   = "logfile"
+				filename  = "testfile"
+				numbuffs  = int32(2)
+				numwaits  = int32(2)
+			)
+			ctx := context.Background()
+
+			fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dpt := NewDirtyPageTable()
+			mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+			blk1, err := fm.Append(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff1, err := mgr.Pin(ctx, blk1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logrec1 := createLogRec(1, "record1")
+			lsn1, err := lm.Append(logrec1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff1.Contents().SetInt32(0, 1)
+			buff1.Contents().SetStr(int32Size, "record1")
+			buff1.SetModified(1, lsn1)
+			mgr.Unpin(ctx, buff1)
+
+			blk2, err := fm.Append(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff2, err := mgr.Pin(ctx, blk2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logrec2 := createLogRec(2, "record2")
+			lsn2, err := lm.Append(logrec2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff2.Contents().SetInt32(0, 2)
+			buff2.Contents().SetStr(int32Size, "record2")
+			buff2.SetModified(2, lsn2)
+			mgr.Unpin(ctx, buff2)
+
+			flushed, err := mgr.FlushDirtyPages(ctx, 0)
+			if err != nil {
+				t.Fatalf("FlushDirtyPagesは失敗しないべきだが%vだった", err)
+			}
+			if flushed != 0 {
+				t.Fatalf("flush件数は0であるべきだが%vだった", flushed)
+			}
+		})
+
+		t.Run("limitが負のとき0,nilを返す", func(t *testing.T) {
+			const (
+				blocksize = int32(256)
+				logfile   = "logfile"
+				filename  = "testfile"
+				numbuffs  = int32(2)
+				numwaits  = int32(2)
+			)
+			ctx := context.Background()
+
+			fm, lm, err := initFileLogMgr(t.TempDir(), blocksize, logfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dpt := NewDirtyPageTable()
+			mgr := NewBufferMgr(fm, lm, numbuffs, numwaits, dpt)
+
+			blk1, err := fm.Append(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff1, err := mgr.Pin(ctx, blk1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logrec1 := createLogRec(1, "record1")
+			lsn1, err := lm.Append(logrec1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff1.Contents().SetInt32(0, 1)
+			buff1.Contents().SetStr(int32Size, "record1")
+			buff1.SetModified(1, lsn1)
+			mgr.Unpin(ctx, buff1)
+
+			blk2, err := fm.Append(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff2, err := mgr.Pin(ctx, blk2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logrec2 := createLogRec(2, "record2")
+			lsn2, err := lm.Append(logrec2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			buff2.Contents().SetInt32(0, 2)
+			buff2.Contents().SetStr(int32Size, "record2")
+			buff2.SetModified(2, lsn2)
+			mgr.Unpin(ctx, buff2)
+
+			flushed, err := mgr.FlushDirtyPages(ctx, -1)
+			if err != nil {
+				t.Fatalf("FlushDirtyPagesは失敗しないべきだが%vだった", err)
+			}
+			if flushed != 0 {
+				t.Fatalf("flush件数は0であるべきだが%vだった", flushed)
+			}
+		})
+	})
 
 	t.Run("BufferMgr: FlushAll(tx)は該当txのログを永続化する", func(t *testing.T) {
 		t.Parallel()
