@@ -559,6 +559,54 @@ func TestTransaction_Persistence(t *testing.T) {
 		rTx.Commit(ctx)
 	})
 
+	t.Run("Checkpoint", func(t *testing.T) {
+		t.Run("Checkpoint: RecoveryTransactionMgrから呼ぶと成功する", func(t *testing.T) {
+			ctx := context.Background()
+			env := newTxTestEnv(t, "")
+			recoveryTx := env.newRecoveryTx(t)
+
+			endLSN, err := recoveryTx.Checkpoint(ctx)
+			if err != nil {
+				t.Fatalf("Checkpoint failed: %v", err)
+			}
+			if endLSN <= 0 {
+				t.Fatalf("Checkpointは正のLSNを返すべきだが%dだった", endLSN)
+			}
+		})
+
+		t.Run("Checkpoint: 実行後にReadLastCheckpointLSNが更新される", func(t *testing.T) {
+			ctx := context.Background()
+			env := newTxTestEnv(t, "")
+			recoveryTx := env.newRecoveryTx(t)
+			wTx := env.newTx(t)
+			if err := wTx.Commit(ctx); err != nil {
+				t.Fatalf("checkpoint前のCommitが失敗した: %v", err)
+			}
+
+			before, err := env.lm.ReadLastCheckpointLSN()
+			if err != nil {
+				t.Fatalf("checkpoint前のReadLastCheckpointLSNが失敗した: %v", err)
+			}
+
+			endLSN, err := recoveryTx.Checkpoint(ctx)
+			if err != nil {
+				t.Fatalf("Checkpoint failed: %v", err)
+			}
+
+			after, err := env.lm.ReadLastCheckpointLSN()
+			if err != nil {
+				t.Fatalf("checkpoint後のReadLastCheckpointLSNが失敗した: %v", err)
+			}
+
+			if after <= before {
+				t.Errorf("lastCheckpointLSNは更新されるべきだが before=%d after=%d だった", before, after)
+			}
+			if after >= endLSN {
+				t.Errorf("lastCheckpointLSNはcheckpointのendLSNより前を指すべきだが lastCheckpointLSN=%d endLSN=%d だった", after, endLSN)
+			}
+		})
+	})
+
 	// Recover should undo losers and keep winners
 	t.Run("Recover: loserを取り消してcommitted更新を維持する", func(t *testing.T) {
 		// Arrange

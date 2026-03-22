@@ -94,6 +94,10 @@ func (txmgr *TransactionMgr) Recover(ctx context.Context) error {
 	return nil
 }
 
+func (txmgr *TransactionMgr) Checkpoint(ctx context.Context) (int32, error) {
+	return txmgr.recoveryMgr.Checkpoint(ctx)
+}
+
 func (txmgr *TransactionMgr) Pin(ctx context.Context, blk *file.BlockId) error {
 	if err := txmgr.txAccess.Pin(ctx, blk); err != nil {
 		return fmt.Errorf("could not pin block: %w", err)
