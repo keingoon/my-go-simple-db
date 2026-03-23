@@ -1,0 +1,122 @@
+package logrecord
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/keingoon/simpledb/internal/file"
+	"github.com/keingoon/simpledb/internal/log"
+	"github.com/keingoon/simpledb/internal/trx/access"
+)
+
+type SetInt32Record struct {
+	lsn     int32
+	prevLSN int32
+	txnum   int32
+	blk     *file.BlockId
+	offset  int32
+	oldVal  int32
+	newVal  int32
+}
+
+func NewSetInt32Record(p *file.Page, lsn int32) *SetInt32Record {
+	prevPos := int32Size
+	prevLSN := p.GetInt32(int32(prevPos))
+	tPos := prevPos + int32Size
+	txnum := p.GetInt32(int32(tPos))
+	fPos := tPos + int32Size
+	filename := p.GetStr(int32(fPos))
+	bPos := fPos + file.VarBytesLen(len(filename))
+	blknum := p.GetInt32(int32(bPos))
+	blk := file.NewBlockId(filename, blknum)
+	oPos := bPos + int32Size
+	offset := p.GetInt32(int32(oPos))
+	oldPos := oPos + int32Size
+	oldVal := p.GetInt32(int32(oldPos))
+	newPos := oldPos + int32Size
+	newVal := p.GetInt32(int32(newPos))
+
+	return &SetInt32Record{
+		lsn,
+		prevLSN,
+		txnum,
+		blk,
+		offset,
+		oldVal,
+		newVal,
+	}
+}
+
+func (r *SetInt32Record) Op() int32 { return setInt32 }
+
+func (r *SetInt32Record) PrevLSN() int32 { return r.prevLSN }
+
+func (r *SetInt32Record) TxNumber() int32 { return r.txnum }
+
+func (r *SetInt32Record) Blk() *file.BlockId { return r.blk }
+
+func (r *SetInt32Record) String() string {
+	return fmt.Sprintf("<SETINT32 %d %s %d %d %d>", r.txnum, r.blk.ToString(), r.offset, r.oldVal, r.newVal)
+}
+
+func (r *SetInt32Record) UndoPage(ctx context.Context, txAccess *access.Transaction, clrLSN int32) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
+	if err := txAccess.ApplyInt32(ctx, clrLSN, r.txnum, r.blk, r.offset, r.oldVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
+	txAccess.Unpin(ctx, r.blk)
+	return nil
+}
+
+func (r *SetInt32Record) RedoPage(ctx context.Context, txAccess *access.Transaction) error {
+	if err := txAccess.Pin(ctx, r.blk); err != nil {
+		return err
+	}
+	if err := txAccess.ApplyInt32(ctx, r.lsn, r.txnum, r.blk, r.offset, r.newVal); err != nil {
+		txAccess.Unpin(ctx, r.blk)
+		return err
+	}
+	txAccess.Unpin(ctx, r.blk)
+	return nil
+}
+
+func (r *SetInt32Record) WriteCLR(ctx context.Context, txAccess *access.Transaction, lm *log.LogMgr, prevLSN int32) (int32, error) {
+	undoNextLSN := r.prevLSN
+	return WriteCompensationSetInt32ToLog(lm, prevLSN, r.txnum, r.blk, r.offset, r.newVal, r.oldVal, undoNextLSN)
+}
+
+// Layout:
+// [op:int32][prevLSN:int32][txnum:int32][fileName:str][blknum:int32][offset:int32][oldVal:int32][newVal:int32]
+func WriteSetInt32ToLog(lm *log.LogMgr, prevLSN int32, txnum int32, blk *file.BlockId, offset int32, oldVal int32, newVal int32) (int32, error) {
+	recLen := int32Size + int32Size + int32Size + int32(file.VarBytesLen(len(blk.FileName()))) + int32Size + int32Size + int32Size + int32Size
+	enc := newRecordEncoder(recLen)
+	if err := enc.PutInt32(setInt32); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutInt32(prevLSN); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutInt32(txnum); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutBlock(blk); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutInt32(offset); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutInt32(oldVal); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	if err := enc.PutInt32(newVal); err != nil {
+		return -1, fmt.Errorf("could not encode set int32 record: %w", err)
+	}
+	lsn, err := lm.Append(enc.Bytes())
+	if err != nil {
+		return -1, fmt.Errorf("could not write int32 record to log: %w", err)
+	}
+	return lsn, nil
+}
