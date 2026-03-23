@@ -86,6 +86,21 @@ func newSimpleDBForTest(t *testing.T, dbDirectoryPath string, deps simpleDBDeps)
 		pgclInterval:         time.Second * 2,
 		pageCleanerBatchSize: defaultPageCleanerBatchSize,
 	}
+	if deps.newRecoveryRunner == nil {
+		deps.newRecoveryRunner = func() (recoveryRunner, error) {
+			return tx.NewRecoveryTransactionMgr(locktbl, fm, lm, bm, atTbl, dptTbl)
+		}
+	}
+	if deps.flushDirtyPages == nil {
+		deps.flushDirtyPages = func(ctx context.Context, limit int32) (int32, error) {
+			return bm.FlushDirtyPages(ctx, limit)
+		}
+	}
+	if deps.newTicker == nil {
+		deps.newTicker = func(d time.Duration) backgroundTicker {
+			return &realTicker{ticker: time.NewTicker(d)}
+		}
+	}
 
 	return newSimpleDBWithDeps(fm, lm, bm, locktbl, atTbl, dptTbl, config, deps)
 }
@@ -686,6 +701,160 @@ func TestSimpleDB(t *testing.T) {
 		db.mu.Unlock()
 		if got != closed {
 			t.Errorf("stateはclosedのままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("checkpointとpage cleanerを経たcrash recoveryでcommittedを保持しloserをundoする", func(t *testing.T) {
+		const (
+			offset         = int32(0)
+			committedValue = int32(111)
+			loserValue     = int32(222)
+		)
+		ctx := context.Background()
+		dir := t.TempDir()
+
+		beforeCrashCheckpointTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		beforeCrashPageCleanerTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		beforeCrashDeps := simpleDBDeps{
+			newTicker: newTickerFactory(beforeCrashCheckpointTicker, beforeCrashPageCleanerTicker),
+		}
+		beforeCrashDB := newSimpleDBForTest(t, dir, beforeCrashDeps)
+		if err := beforeCrashDB.Start(); err != nil {
+			t.Fatalf("beforeCrashDBのStartは成功するべきだが%vだった", err)
+		}
+
+		committedTx, err := beforeCrashDB.NewTransaction()
+		if err != nil {
+			t.Fatalf("committedTxの作成は成功するべきだが%vだった", err)
+		}
+		committedBlk, err := beforeCrashDB.fm.Append("e2e_committed")
+		if err != nil {
+			t.Fatalf("committed blockのappendは成功するべきだが%vだった", err)
+		}
+		if err := committedTx.Pin(ctx, committedBlk); err != nil {
+			t.Fatalf("committed blockのPinは成功するべきだが%vだった", err)
+		}
+		if err := committedTx.SetInt32(ctx, committedBlk, offset, committedValue, true); err != nil {
+			t.Fatalf("committed valueのSetInt32は成功するべきだが%vだった", err)
+		}
+		if err := committedTx.Commit(ctx); err != nil {
+			t.Fatalf("committedTxのCommitは成功するべきだが%vだった", err)
+		}
+
+		loserTx, err := beforeCrashDB.NewTransaction()
+		if err != nil {
+			t.Fatalf("loserTxの作成は成功するべきだが%vだった", err)
+		}
+		loserBlk, err := beforeCrashDB.fm.Append("e2e_loser")
+		if err != nil {
+			t.Fatalf("loser blockのappendは成功するべきだが%vだった", err)
+		}
+		if err := loserTx.Pin(ctx, loserBlk); err != nil {
+			t.Fatalf("loser blockのPinは成功するべきだが%vだった", err)
+		}
+		if err := loserTx.SetInt32(ctx, loserBlk, offset, loserValue, true); err != nil {
+			t.Fatalf("loser valueのSetInt32は成功するべきだが%vだった", err)
+		}
+		loserTx.Unpin(ctx, loserBlk)
+
+		beforeCheckpointLSN, err := beforeCrashDB.lm.ReadLastCheckpointLSN()
+		if err != nil {
+			t.Fatalf("checkpoint前のReadLastCheckpointLSNは成功するべきだが%vだった", err)
+		}
+
+		beforeCrashCheckpointTicker.Tick()
+		checkpointDeadline := time.Now().Add(1 * time.Second)
+		for {
+			afterCheckpointLSN, err := beforeCrashDB.lm.ReadLastCheckpointLSN()
+			if err != nil {
+				t.Fatalf("checkpoint後のReadLastCheckpointLSNは成功するべきだが%vだった", err)
+			}
+			if afterCheckpointLSN > beforeCheckpointLSN {
+				break
+			}
+			if time.Now().After(checkpointDeadline) {
+				t.Fatal("checkpoint tick後にlastCheckpointLSNが更新されなかった")
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+
+		beforeCrashPageCleanerTicker.Tick()
+		pageCleanerDeadline := time.Now().Add(1 * time.Second)
+		for {
+			committedPage := file.NewPage(beforeCrashDB.fm.BlockSize())
+			if err := beforeCrashDB.fm.Read(committedBlk, committedPage); err != nil {
+				t.Fatalf("committed pageのReadは成功するべきだが%vだった", err)
+			}
+			loserPage := file.NewPage(beforeCrashDB.fm.BlockSize())
+			if err := beforeCrashDB.fm.Read(loserBlk, loserPage); err != nil {
+				t.Fatalf("loser pageのReadは成功するべきだが%vだった", err)
+			}
+			if committedPage.GetInt32(offset) == committedValue && loserPage.GetInt32(offset) == loserValue {
+				break
+			}
+			if time.Now().After(pageCleanerDeadline) {
+				t.Fatal("page cleaner tick後にdirty pageがdiskへflushされなかった")
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+
+		beforeCrashCheckpointTicker.Stop()
+		beforeCrashPageCleanerTicker.Stop()
+		if beforeCrashDB.cancel != nil {
+			beforeCrashDB.cancel()
+		}
+		if beforeCrashDB.wg != nil {
+			beforeCrashDB.wg.Wait()
+		}
+
+		afterCrashCheckpointTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		afterCrashPageCleanerTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		afterCrashDeps := simpleDBDeps{
+			newTicker: newTickerFactory(afterCrashCheckpointTicker, afterCrashPageCleanerTicker),
+		}
+		afterCrashDB := newSimpleDBForTest(t, dir, afterCrashDeps)
+		if err := afterCrashDB.Start(); err != nil {
+			t.Fatalf("afterCrashDBのStartは成功するべきだが%vだった", err)
+		}
+
+		readCommittedTx, err := afterCrashDB.NewTransaction()
+		if err != nil {
+			t.Fatalf("readCommittedTxの作成は成功するべきだが%vだった", err)
+		}
+		if err := readCommittedTx.Pin(ctx, committedBlk); err != nil {
+			t.Fatalf("committed blockのPinは成功するべきだが%vだった", err)
+		}
+		gotCommittedValue, err := readCommittedTx.GetInt32(ctx, committedBlk, offset)
+		if err != nil {
+			t.Fatalf("committed valueのGetInt32は成功するべきだが%vだった", err)
+		}
+		if gotCommittedValue != committedValue {
+			t.Errorf("committed valueは%dであるべきだが%dだった", committedValue, gotCommittedValue)
+		}
+		if err := readCommittedTx.Commit(ctx); err != nil {
+			t.Fatalf("readCommittedTxのCommitは成功するべきだが%vだった", err)
+		}
+
+		readLoserTx, err := afterCrashDB.NewTransaction()
+		if err != nil {
+			t.Fatalf("readLoserTxの作成は成功するべきだが%vだった", err)
+		}
+		if err := readLoserTx.Pin(ctx, loserBlk); err != nil {
+			t.Fatalf("loser blockのPinは成功するべきだが%vだった", err)
+		}
+		gotLoserValue, err := readLoserTx.GetInt32(ctx, loserBlk, offset)
+		if err != nil {
+			t.Fatalf("loser valueのGetInt32は成功するべきだが%vだった", err)
+		}
+		if gotLoserValue != 0 {
+			t.Errorf("loser valueはundoされて0であるべきだが%dだった", gotLoserValue)
+		}
+		if err := readLoserTx.Commit(ctx); err != nil {
+			t.Fatalf("readLoserTxのCommitは成功するべきだが%vだった", err)
+		}
+
+		if err := afterCrashDB.Close(); err != nil {
+			t.Fatalf("afterCrashDBのCloseは成功するべきだが%vだった", err)
 		}
 	})
 
