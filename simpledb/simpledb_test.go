@@ -14,6 +14,7 @@ import (
 	"github.com/keingoon/simpledb/internal/log"
 	"github.com/keingoon/simpledb/internal/trx/concurrency"
 	"github.com/keingoon/simpledb/internal/trx/recovery"
+	"github.com/keingoon/simpledb/internal/trx/tx"
 )
 
 type fakeRecoveryRunner struct {
@@ -115,6 +116,42 @@ func TestSimpleDB(t *testing.T) {
 			t.Errorf("stateはstartedであるべきだが%vだった", got)
 		}
 
+		if err := db.Close(); err != nil {
+			t.Fatalf("cleanupのCloseは成功するべきだが%vだった", err)
+		}
+	})
+
+	t.Run("NewTransactionはstarted状態で成功する", func(t *testing.T) {
+		ckpTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		pgclTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		deps := simpleDBDeps{
+			newRecoveryRunner: func() (recoveryRunner, error) {
+				return &fakeRecoveryRunner{}, nil
+			},
+			flushDirtyPages: func(ctx context.Context, limit int32) (int32, error) {
+				return 0, nil
+			},
+			newTicker: newTickerFactory(ckpTicker, pgclTicker),
+		}
+		db := newSimpleDBForTest(t, t.TempDir(), deps)
+		if err := db.Start(); err != nil {
+			t.Fatalf("Startは成功するべきだが%vだった", err)
+		}
+
+		txmgr, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("started状態のNewTransactionは成功するべきだが%vだった", err)
+		}
+		if txmgr == nil {
+			t.Fatal("started状態のNewTransactionはnilでないTransactionMgrを返すべき")
+		}
+		if _, ok := any(txmgr).(*tx.TransactionMgr); !ok {
+			t.Fatalf("NewTransactionは*tx.TransactionMgrを返すべきだが%Tだった", txmgr)
+		}
+
+		if err := txmgr.Commit(context.Background()); err != nil {
+			t.Fatalf("NewTransactionで作成したTransactionMgrのCommitは成功するべきだが%vだった", err)
+		}
 		if err := db.Close(); err != nil {
 			t.Fatalf("cleanupのCloseは成功するべきだが%vだった", err)
 		}
@@ -235,6 +272,29 @@ func TestSimpleDB(t *testing.T) {
 		db.mu.Unlock()
 		if got != created {
 			t.Errorf("stateはcreatedのままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("NewTransactionはcreated状態でエラーを返す", func(t *testing.T) {
+		deps := simpleDBDeps{
+			newRecoveryRunner: func() (recoveryRunner, error) {
+				return &fakeRecoveryRunner{}, nil
+			},
+			flushDirtyPages: func(ctx context.Context, limit int32) (int32, error) {
+				return 0, nil
+			},
+			newTicker: func(d time.Duration) backgroundTicker {
+				return &manualTicker{ch: make(chan time.Time, 1)}
+			},
+		}
+		db := newSimpleDBForTest(t, t.TempDir(), deps)
+
+		txmgr, err := db.NewTransaction()
+		if err == nil {
+			t.Fatal("created状態のNewTransactionはエラーを返すべき")
+		}
+		if txmgr != nil {
+			t.Fatalf("created状態のNewTransactionはnilを返すべきだが%vだった", txmgr)
 		}
 	})
 
@@ -437,6 +497,53 @@ func TestSimpleDB(t *testing.T) {
 		}
 	})
 
+	t.Run("NewTransactionはstarting状態でエラーを返す", func(t *testing.T) {
+		ckpTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		pgclTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		recoveryRunnerStarted := make(chan struct{}, 1)
+		releaseRecoveryRunner := make(chan struct{})
+		deps := simpleDBDeps{
+			newRecoveryRunner: func() (recoveryRunner, error) {
+				select {
+				case recoveryRunnerStarted <- struct{}{}:
+				default:
+				}
+				<-releaseRecoveryRunner
+				return &fakeRecoveryRunner{}, nil
+			},
+			flushDirtyPages: func(ctx context.Context, limit int32) (int32, error) {
+				return 0, nil
+			},
+			newTicker: newTickerFactory(ckpTicker, pgclTicker),
+		}
+		db := newSimpleDBForTest(t, t.TempDir(), deps)
+
+		startErrCh := make(chan error, 1)
+		go func() {
+			startErrCh <- db.Start()
+		}()
+
+		<-recoveryRunnerStarted
+
+		txmgr, err := db.NewTransaction()
+		if err == nil {
+			t.Fatal("starting状態のNewTransactionはエラーを返すべき")
+		}
+		if txmgr != nil {
+			t.Fatalf("starting状態のNewTransactionはnilを返すべきだが%vだった", txmgr)
+		}
+
+		close(releaseRecoveryRunner)
+
+		if err := <-startErrCh; err != nil {
+			t.Fatalf("Startは成功するべきだが%vだった", err)
+		}
+
+		if err := db.Close(); err != nil {
+			t.Fatalf("cleanupのCloseは成功するべきだが%vだった", err)
+		}
+	})
+
 	t.Run("Closeは並列2回実行でpanicせず完了する", func(t *testing.T) {
 		ckpTicker := &manualTicker{ch: make(chan time.Time, 1)}
 		pgclTicker := &manualTicker{ch: make(chan time.Time, 1)}
@@ -517,6 +624,35 @@ func TestSimpleDB(t *testing.T) {
 		db.mu.Unlock()
 		if got != closed {
 			t.Errorf("stateはclosedのままであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("NewTransactionはclosed状態でエラーを返す", func(t *testing.T) {
+		ckpTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		pgclTicker := &manualTicker{ch: make(chan time.Time, 1)}
+		deps := simpleDBDeps{
+			newRecoveryRunner: func() (recoveryRunner, error) {
+				return &fakeRecoveryRunner{}, nil
+			},
+			flushDirtyPages: func(ctx context.Context, limit int32) (int32, error) {
+				return 0, nil
+			},
+			newTicker: newTickerFactory(ckpTicker, pgclTicker),
+		}
+		db := newSimpleDBForTest(t, t.TempDir(), deps)
+		if err := db.Start(); err != nil {
+			t.Fatalf("Startは成功するべきだが%vだった", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Closeは成功するべきだが%vだった", err)
+		}
+
+		txmgr, err := db.NewTransaction()
+		if err == nil {
+			t.Fatal("closed状態のNewTransactionはエラーを返すべき")
+		}
+		if txmgr != nil {
+			t.Fatalf("closed状態のNewTransactionはnilを返すべきだが%vだった", txmgr)
 		}
 	})
 

@@ -168,6 +168,22 @@ func (db *SimpleDB) Start() error {
 	return nil
 }
 
+func (db *SimpleDB) NewTransaction() (*tx.TransactionMgr, error) {
+	db.mu.Lock()
+	state := db.state
+	db.mu.Unlock()
+
+	if state != started {
+		return nil, fmt.Errorf("new transaction is not allowed in state %v", state)
+	}
+
+	txmgr, err := tx.NewTransactionMgr(db.locktbl, db.fm, db.lm, db.bm, db.atTbl, db.dptTbl)
+	if err != nil {
+		return nil, err
+	}
+	return txmgr, nil
+}
+
 func (db *SimpleDB) doStart() error {
 	recovtxmgr, err := db.deps.newRecoveryRunner()
 	if err != nil {
