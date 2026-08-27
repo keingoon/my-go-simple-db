@@ -62,6 +62,7 @@ func (rp *RecordPage) Format(ctx context.Context) {
 				rp.tx.SetStr(ctx, rp.blk, fldpos, "", false)
 			}
 		}
+		slot++
 	}
 }
 
@@ -75,8 +76,10 @@ func (rp *RecordPage) InsertAfter(ctx context.Context, slot int32) (int32, error
 		return -1, fmt.Errorf("searchafter error: %w", err)
 	}
 
-	if err := rp.setFlag(ctx, newslot, Used); err != nil {
-		return -1, fmt.Errorf("setflag error: %w", err)
+	if newslot >= 0 {
+		if err := rp.setFlag(ctx, newslot, Used); err != nil {
+			return -1, fmt.Errorf("setflag error: %w", err)
+		}
 	}
 
 	return newslot, nil
@@ -108,7 +111,8 @@ func (rp *RecordPage) searchAfter(ctx context.Context, slot int32, flag int32) (
 }
 
 func (rp *RecordPage) isValidSlot(slot int32) bool {
-	return rp.offset(slot+1) <= rp.tx.Blocksize()
+	// Pageのoffsetはデータ領域相対。ブロック先頭のヘッダ分を除いたサイズと比較する。
+	return rp.offset(slot+1) <= rp.tx.Blocksize()-file.PageHeaderSize
 }
 
 func (rp *RecordPage) offset(slot int32) int32 {
