@@ -9,12 +9,18 @@ import (
 type FieldType int32
 
 const (
-	Integer FieldType = 4
-	Varchar FieldType = 12
+	Integer   FieldType = 4
+	SmallInt  FieldType = 5
+	Varchar   FieldType = 12
+	Boolean   FieldType = 16
+	Timestamp FieldType = 93
 )
 
 const (
 	int32Size int32 = 4
+	int16Size int32 = 2
+	boolSize  int32 = 1
+	dateSize  int32 = 8 // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
 )
 
 type FieldInfo struct {
@@ -58,6 +64,18 @@ func (schema *Schema) AddField(fldname string, fldtype FieldType, length int32) 
 
 func (schema *Schema) AddIntField(fldname string) {
 	schema.AddField(fldname, Integer, 0)
+}
+
+func (schema *Schema) AddSmallIntField(fldname string) {
+	schema.AddField(fldname, SmallInt, 0)
+}
+
+func (schema *Schema) AddBoolField(fldname string) {
+	schema.AddField(fldname, Boolean, 0)
+}
+
+func (schema *Schema) AddDateField(fldname string) {
+	schema.AddField(fldname, Timestamp, 0)
 }
 
 func (schema *Schema) AddStringField(fldname string, length int32) {
@@ -116,9 +134,17 @@ func (layout *Layout) SlotSize() int32 {
 
 func (layout *Layout) lengthInBytes(fldname string) int32 {
 	fldType := layout.schema.FldType(fldname)
-	if fldType == Integer {
+	switch fldType {
+	case Integer:
 		return int32Size
+	case SmallInt:
+		return int16Size
+	case Boolean:
+		return boolSize
+	case Timestamp:
+		return dateSize
+	default:
+		strLen := layout.schema.Length(fldname)
+		return int32(file.VarBytesLen(int(strLen)))
 	}
-	strLen := layout.schema.Length(fldname)
-	return int32(file.VarBytesLen(int(strLen)))
 }

@@ -63,6 +63,111 @@ func TestSchema(t *testing.T) {
 		})
 	})
 
+	t.Run("Schema: AddSmallIntField", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddSmallIntField("A")
+
+		t.Run("Fieldsにフィールド名が含まれる", func(t *testing.T) {
+			t.Parallel()
+			fields := sch.Fields()
+			if len(fields) != 1 || fields[0] != "A" {
+				t.Fatalf("Fieldsは[A]であるべきだが%vだった", fields)
+			}
+		})
+
+		t.Run("FldTypeはSmallIntを返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.FldType("A"); got != SmallInt {
+				t.Fatalf("FldTypeは%dであるべきだが%dだった", SmallInt, got)
+			}
+		})
+
+		t.Run("Lengthは0を返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.Length("A"); got != 0 {
+				t.Fatalf("Lengthは0であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("HasFieldはtrueを返す", func(t *testing.T) {
+			t.Parallel()
+			if !sch.HasField("A") {
+				t.Fatalf("HasFieldはtrueを返すべき")
+			}
+		})
+	})
+
+	t.Run("Schema: AddBoolField", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddBoolField("A")
+
+		t.Run("Fieldsにフィールド名が含まれる", func(t *testing.T) {
+			t.Parallel()
+			fields := sch.Fields()
+			if len(fields) != 1 || fields[0] != "A" {
+				t.Fatalf("Fieldsは[A]であるべきだが%vだった", fields)
+			}
+		})
+
+		t.Run("FldTypeはBooleanを返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.FldType("A"); got != Boolean {
+				t.Fatalf("FldTypeは%dであるべきだが%dだった", Boolean, got)
+			}
+		})
+
+		t.Run("Lengthは0を返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.Length("A"); got != 0 {
+				t.Fatalf("Lengthは0であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("HasFieldはtrueを返す", func(t *testing.T) {
+			t.Parallel()
+			if !sch.HasField("A") {
+				t.Fatalf("HasFieldはtrueを返すべき")
+			}
+		})
+	})
+
+	t.Run("Schema: AddDateField", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddDateField("A")
+
+		t.Run("Fieldsにフィールド名が含まれる", func(t *testing.T) {
+			t.Parallel()
+			fields := sch.Fields()
+			if len(fields) != 1 || fields[0] != "A" {
+				t.Fatalf("Fieldsは[A]であるべきだが%vだった", fields)
+			}
+		})
+
+		t.Run("FldTypeはTimestampを返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.FldType("A"); got != Timestamp {
+				t.Fatalf("FldTypeは%dであるべきだが%dだった", Timestamp, got)
+			}
+		})
+
+		t.Run("Lengthは0を返す", func(t *testing.T) {
+			t.Parallel()
+			if got := sch.Length("A"); got != 0 {
+				t.Fatalf("Lengthは0であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("HasFieldはtrueを返す", func(t *testing.T) {
+			t.Parallel()
+			if !sch.HasField("A") {
+				t.Fatalf("HasFieldはtrueを返すべき")
+			}
+		})
+	})
+
 	t.Run("Schema: AddStringField", func(t *testing.T) {
 		t.Parallel()
 		sch := NewSchema()
@@ -176,6 +281,75 @@ func TestLayout(t *testing.T) {
 			// flag(4) + int(4)
 			if got := layout.SlotSize(); got != 8 {
 				t.Fatalf("SlotSizeは8であるべきだが%dだった", got)
+			}
+		})
+	})
+
+	t.Run("Layout: smallintフィールドのoffsetとslotSize", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddSmallIntField("A")
+		layout := NewLayOut(sch)
+
+		t.Run("Offset(A)は4である", func(t *testing.T) {
+			t.Parallel()
+			// 先頭4バイトはempty/inuseフラグ
+			if got := layout.Offset("A"); got != 4 {
+				t.Fatalf("Offset(A)は4であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("SlotSizeは6である", func(t *testing.T) {
+			t.Parallel()
+			// flag(4) + smallint(2)
+			if got := layout.SlotSize(); got != 6 {
+				t.Fatalf("SlotSizeは6であるべきだが%dだった", got)
+			}
+		})
+	})
+
+	t.Run("Layout: booleanフィールドのoffsetとslotSize", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddBoolField("A")
+		layout := NewLayOut(sch)
+
+		t.Run("Offset(A)は4である", func(t *testing.T) {
+			t.Parallel()
+			// 先頭4バイトはempty/inuseフラグ
+			if got := layout.Offset("A"); got != 4 {
+				t.Fatalf("Offset(A)は4であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("SlotSizeは5である", func(t *testing.T) {
+			t.Parallel()
+			// flag(4) + bool(1)
+			if got := layout.SlotSize(); got != 5 {
+				t.Fatalf("SlotSizeは5であるべきだが%dだった", got)
+			}
+		})
+	})
+
+	t.Run("Layout: timestampフィールドのoffsetとslotSize", func(t *testing.T) {
+		t.Parallel()
+		sch := NewSchema()
+		sch.AddDateField("A")
+		layout := NewLayOut(sch)
+
+		t.Run("Offset(A)は4である", func(t *testing.T) {
+			t.Parallel()
+			// 先頭4バイトはempty/inuseフラグ
+			if got := layout.Offset("A"); got != 4 {
+				t.Fatalf("Offset(A)は4であるべきだが%dだった", got)
+			}
+		})
+
+		t.Run("SlotSizeは12である", func(t *testing.T) {
+			t.Parallel()
+			// flag(4) + timestamp(8)
+			if got := layout.SlotSize(); got != 12 {
+				t.Fatalf("SlotSizeは12であるべきだが%dだった", got)
 			}
 		})
 	})
