@@ -3,6 +3,7 @@ package recordpage
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/record"
@@ -30,6 +31,21 @@ func (rp *RecordPage) GetInt(ctx context.Context, slot int32, fldname string) (i
 	return rp.tx.GetInt32(ctx, rp.blk, fldpos)
 }
 
+func (rp *RecordPage) GetSmallInt(ctx context.Context, slot int32, fldname string) (int16, error) {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.GetInt16(ctx, rp.blk, fldpos)
+}
+
+func (rp *RecordPage) GetBool(ctx context.Context, slot int32, fldname string) (bool, error) {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.GetBool(ctx, rp.blk, fldpos)
+}
+
+func (rp *RecordPage) GetDate(ctx context.Context, slot int32, fldname string) (time.Time, error) {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.GetDate(ctx, rp.blk, fldpos)
+}
+
 func (rp *RecordPage) GetString(ctx context.Context, slot int32, fldname string) (string, error) {
 	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
 	return rp.tx.GetStr(ctx, rp.blk, fldpos)
@@ -38,6 +54,21 @@ func (rp *RecordPage) GetString(ctx context.Context, slot int32, fldname string)
 func (rp *RecordPage) SetInt(ctx context.Context, slot int32, fldname string, val int32) error {
 	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
 	return rp.tx.SetInt32(ctx, rp.blk, fldpos, val, true)
+}
+
+func (rp *RecordPage) SetSmallInt(ctx context.Context, slot int32, fldname string, val int16) error {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.SetInt16(ctx, rp.blk, fldpos, val, true)
+}
+
+func (rp *RecordPage) SetBool(ctx context.Context, slot int32, fldname string, val bool) error {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.SetBool(ctx, rp.blk, fldpos, val, true)
+}
+
+func (rp *RecordPage) SetDate(ctx context.Context, slot int32, fldname string, val time.Time) error {
+	fldpos := rp.offset(slot) + rp.layout.Offset(fldname)
+	return rp.tx.SetDate(ctx, rp.blk, fldpos, val, true)
 }
 
 func (rp *RecordPage) SetStr(ctx context.Context, slot int32, fldname string, val string) error {

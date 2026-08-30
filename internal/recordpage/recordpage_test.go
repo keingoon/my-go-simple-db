@@ -3,6 +3,7 @@ package recordpage
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
@@ -280,6 +281,75 @@ func TestRecordPage(t *testing.T) {
 		}
 		if got != want {
 			t.Fatalf("GetIntは%dであるべきだが%dだった", want, got)
+		}
+	})
+
+	t.Run("RecordPage: SetSmallInt/GetSmallInt", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		_, rp := newFormattedRecordPage(t, newRpTestEnv(t))
+
+		slot, err := rp.InsertAfter(ctx, -1)
+		if err != nil {
+			t.Fatalf("InsertAfterが失敗した: %v", err)
+		}
+		const want int16 = 6
+		if err := rp.SetSmallInt(ctx, slot, "A", want); err != nil {
+			t.Fatalf("SetSmallIntが失敗した: %v", err)
+		}
+
+		got, err := rp.GetSmallInt(ctx, slot, "A")
+		if err != nil {
+			t.Fatalf("GetSmallIntが失敗した: %v", err)
+		}
+		if got != want {
+			t.Fatalf("GetSmallIntは%dであるべきだが%dだった", want, got)
+		}
+	})
+
+	t.Run("RecordPage: SetBool/GetBool", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		_, rp := newFormattedRecordPage(t, newRpTestEnv(t))
+
+		slot, err := rp.InsertAfter(ctx, -1)
+		if err != nil {
+			t.Fatalf("InsertAfterが失敗した: %v", err)
+		}
+		const want bool = true
+		if err := rp.SetBool(ctx, slot, "A", want); err != nil {
+			t.Fatalf("SetBoolが失敗した: %v", err)
+		}
+
+		got, err := rp.GetBool(ctx, slot, "A")
+		if err != nil {
+			t.Fatalf("GetBoolが失敗した: %v", err)
+		}
+		if got != want {
+			t.Fatalf("GetBoolは%tであるべきだが%tだった", want, got)
+		}
+	})
+
+	t.Run("RecordPage: SetDate/GetDate", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		_, rp := newFormattedRecordPage(t, newRpTestEnv(t))
+
+		slot, err := rp.InsertAfter(ctx, -1)
+		if err != nil {
+			t.Fatalf("InsertAfterが失敗した: %v", err)
+		}
+		want := time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC)
+		if err := rp.SetDate(ctx, slot, "A", want); err != nil {
+			t.Fatalf("SetDateが失敗した: %v", err)
+		}
+
+		got, err := rp.GetDate(ctx, slot, "A")
+		if err != nil {
+			t.Fatalf("GetDateが失敗した: %v", err)
+		}
+		if got != want {
+			t.Fatalf("GetDateは%vであるべきだが%vだった", want, got)
 		}
 	})
 
