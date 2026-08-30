@@ -413,3 +413,77 @@ func TestLayout(t *testing.T) {
 		})
 	})
 }
+
+func TestRID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RID: NewRIDの初期状態", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blknum int32 = 4
+			slot   int32 = 3
+		)
+		rid := NewRID(blknum, slot)
+
+		t.Run("BlockNumberは指定の値である", func(t *testing.T) {
+			t.Parallel()
+			if got := rid.BlockNumber(); got != blknum {
+				t.Fatalf("BlockNumberは%dであるべきだが%dだった", blknum, got)
+			}
+		})
+
+		t.Run("Slotは指定の値である", func(t *testing.T) {
+			t.Parallel()
+			if got := rid.Slot(); got != slot {
+				t.Fatalf("Slotは%dであるべきだが%dだった", slot, got)
+			}
+		})
+	})
+
+	t.Run("RID: Equals", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blknum1 int32 = 4
+			slot1   int32 = 3
+			blknum2 int32 = 5
+			slot2   int32 = 6
+		)
+		t.Run("同じblknumとslotならtrueを返す", func(t *testing.T) {
+			t.Parallel()
+			rid1 := NewRID(blknum1, slot1)
+			rid2 := NewRID(blknum1, slot1)
+			if got := rid1.Equals(rid2); got != true {
+				t.Fatalf("Equalsは%tであるべきだが%tだった", true, got)
+			}
+		})
+		t.Run("blknumが異なればfalseを返す", func(t *testing.T) {
+			t.Parallel()
+			rid1 := NewRID(blknum1, slot1)
+			rid2 := NewRID(blknum2, slot1)
+			if got := rid1.Equals(rid2); got != false {
+				t.Fatalf("Equalsは%tであるべきだが%tだった", false, got)
+			}
+		})
+		t.Run("slotが異なればfalseを返す", func(t *testing.T) {
+			t.Parallel()
+			rid1 := NewRID(blknum1, slot1)
+			rid2 := NewRID(blknum1, slot2)
+			if got := rid1.Equals(rid2); got != false {
+				t.Fatalf("Equalsは%tであるべきだが%tだった", false, got)
+			}
+		})
+	})
+
+	t.Run("RID: ToString", func(t *testing.T) {
+		t.Parallel()
+		const (
+			blknum int32 = 4
+			slot   int32 = 3
+		)
+		rid := NewRID(blknum, slot)
+
+		if got := rid.ToString(); got != "[4, 3]" {
+			t.Fatalf("ToStringは[4, 3]であるべきだが%qだった", got)
+		}
+	})
+}

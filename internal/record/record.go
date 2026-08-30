@@ -1,6 +1,7 @@
 package record
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/keingoon/simpledb/internal/file"
@@ -147,4 +148,29 @@ func (layout *Layout) lengthInBytes(fldname string) int32 {
 		strLen := layout.schema.Length(fldname)
 		return int32(file.VarBytesLen(int(strLen)))
 	}
+}
+
+type RID struct {
+	blknum int32
+	slot   int32
+}
+
+func NewRID(blknum, slot int32) *RID {
+	return &RID{blknum, slot}
+}
+
+func (rid *RID) BlockNumber() int32 {
+	return rid.blknum
+}
+
+func (rid *RID) Slot() int32 {
+	return rid.slot
+}
+
+func (rid *RID) Equals(other *RID) bool {
+	return rid.blknum == other.blknum && rid.slot == other.slot
+}
+
+func (rid *RID) ToString() string {
+	return fmt.Sprintf("[%d, %d]", rid.blknum, rid.slot)
 }
