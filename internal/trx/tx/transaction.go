@@ -149,6 +149,10 @@ func (txmgr *TransactionMgr) SetDate(ctx context.Context, blk *file.BlockId, off
 	return txmgr.txAccess.SetDate(ctx, blk, offset, val, okToLog, txmgr.recoveryMgr.SetDate)
 }
 
+func (txmgr *TransactionMgr) Blocksize() int32 {
+	return txmgr.fm.BlockSize()
+}
+
 func nextTxNumber() int32 {
 	atomic.AddInt32(&atomicNextTxNum, 1)
 	return atomicNextTxNum
