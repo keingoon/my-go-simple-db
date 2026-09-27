@@ -17,6 +17,10 @@ import (
 
 var atomicNextTxNum int32 = 0
 
+const (
+	endOfFile = -1
+)
+
 type TransactionMgr struct {
 	recoveryMgr *recovery.RecoveryMgr
 	bm          *buffer.BufferMgr
@@ -151,6 +155,23 @@ func (txmgr *TransactionMgr) SetDate(ctx context.Context, blk *file.BlockId, off
 
 func (txmgr *TransactionMgr) Blocksize() int32 {
 	return txmgr.fm.BlockSize()
+}
+
+func (txmgr *TransactionMgr) Size(ctx context.Context, filename string) (int32, error) {
+	dummyblk := file.NewBlockId(filename, endOfFile)
+	if err := txmgr.txAccess.SLock(ctx, dummyblk); err != nil {
+		return -1, fmt.Errorf("could not slock: %w", err)
+	}
+	return txmgr.fm.Length(filename)
+}
+
+func (txmgr *TransactionMgr) Append(ctx context.Context, filename string) (*file.BlockId, error) {
+	dummyblk := file.NewBlockId(filename, endOfFile)
+	txmgr.txAccess.XLock(ctx, dummyblk)
+	if err := txmgr.txAccess.XLock(ctx, dummyblk); err != nil {
+		return nil, fmt.Errorf("could not xlock: %w", err)
+	}
+	return txmgr.fm.Append(filename)
 }
 
 func nextTxNumber() int32 {
