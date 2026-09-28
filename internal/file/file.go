@@ -53,7 +53,8 @@ const (
 	int16Size      = 2
 	boolSize       = 1
 	dateSize       = 8  // 2038年問題があるため64bitで保存したい。unixtimeで秒まで保存。
-	pageHeaderSize = 64 // ページヘッダーのサイズ
+	PageHeaderSize = 64 // ページヘッダーのサイズ
+	pageHeaderSize = PageHeaderSize
 	pageTypeOffset = 0
 	pageLSNOffset  = int32Size
 )
