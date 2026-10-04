@@ -22,7 +22,6 @@ type TableScan struct {
 func NewTableScan(ctx context.Context, tx *tx.TransactionMgr, tblname string, layout *record.Layout) (*TableScan, error) {
 	filename := tblname + ".tbl"
 	ts := &TableScan{
-		ctx:      ctx,
 		tx:       tx,
 		layout:   layout,
 		filename: filename,
