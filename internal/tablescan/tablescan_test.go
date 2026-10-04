@@ -111,7 +111,7 @@ func TestTableScan(t *testing.T) {
 		}
 	})
 
-	t.Run("SetInt32: 指定したスロット、フィールド名に100が書き込まれたあと、読み込んだ値が100となること", func(t *testing.T) {
+	t.Run("SetInt: 指定したスロット、フィールド名に100が書き込まれたあと、読み込んだ値が100となること", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		env := newTsTestEnv(t)
@@ -128,13 +128,13 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("Insertに失敗した: %v", err)
 		}
 
-		if err := ts.SetInt32(ctx, fldname, 100); err != nil {
-			t.Fatalf("SetInt32に失敗した: %v", err)
+		if err := ts.SetInt(ctx, fldname, 100); err != nil {
+			t.Fatalf("SetIntに失敗した: %v", err)
 		}
 
-		got, err := ts.GetInt32(ctx, fldname)
+		got, err := ts.GetInt(ctx, fldname)
 		if err != nil {
-			t.Fatalf("GetInt32に失敗した: %v", err)
+			t.Fatalf("GetIntに失敗した: %v", err)
 		}
 
 		if got != expected {

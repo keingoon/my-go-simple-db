@@ -49,11 +49,11 @@ func (ts *TableScan) close(ctx context.Context) {
 	}
 }
 
-func (ts *TableScan) SetInt32(ctx context.Context, fldname string, val int32) error {
+func (ts *TableScan) SetInt(ctx context.Context, fldname string, val int32) error {
 	return ts.rp.SetInt(ctx, ts.currentslot, fldname, val)
 }
 
-func (ts *TableScan) GetInt32(ctx context.Context, fldname string) (int32, error) {
+func (ts *TableScan) GetInt(ctx context.Context, fldname string) (int32, error) {
 	return ts.rp.GetInt(ctx, ts.currentslot, fldname)
 }
 
