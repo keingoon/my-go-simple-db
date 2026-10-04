@@ -49,6 +49,43 @@ func (ts *TableScan) close(ctx context.Context) {
 	}
 }
 
+func (ts *TableScan) SetInt32(ctx context.Context, fldname string, val int32) error {
+	return ts.rp.SetInt(ctx, ts.currentslot, fldname, val)
+}
+
+func (ts *TableScan) GetInt32(ctx context.Context, fldname string) (int32, error) {
+	return ts.rp.GetInt(ctx, ts.currentslot, fldname)
+}
+
+func (ts *TableScan) Insert(ctx context.Context) error {
+	currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+	if err != nil {
+		return fmt.Errorf("could not insert: %w", err)
+	}
+	ts.currentslot = currentslot
+	for ts.currentslot < 0 {
+		isAtLastBlk, err := ts.atLastBlock(ctx)
+		if err != nil {
+			return fmt.Errorf("could not get atLastBlock: %w", err)
+		}
+		if isAtLastBlk {
+			if err := ts.moveToNewBlock(ctx); err != nil {
+				return fmt.Errorf("could not moveToNewBlock: %w", err)
+			}
+		} else {
+			if err := ts.moveToBlock(ctx, ts.rp.Block().Number()+1); err != nil {
+				return fmt.Errorf("could not moveToBlock: %w", err)
+			}
+		}
+		currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+		if err != nil {
+			return fmt.Errorf("could not insert: %w", err)
+		}
+		ts.currentslot = currentslot
+	}
+	return nil
+}
+
 func (ts *TableScan) moveToNewBlock(ctx context.Context) error {
 	ts.close(ctx)
 	blk, err := ts.tx.Append(ctx, ts.filename)
@@ -73,4 +110,12 @@ func (ts *TableScan) moveToBlock(ctx context.Context, blknum int32) error {
 	ts.currentslot = -1
 
 	return nil
+}
+
+func (ts *TableScan) atLastBlock(ctx context.Context) (bool, error) {
+	size, err := ts.tx.Size(ctx, ts.filename)
+	if err != nil {
+		return false, fmt.Errorf("could not get size: %w", err)
+	}
+	return ts.rp.Block().Number() == size, nil
 }

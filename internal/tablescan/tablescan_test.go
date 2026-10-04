@@ -110,4 +110,35 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("ブロック数は1のままであるべきだが%dだった", got)
 		}
 	})
+
+	t.Run("SetInt32: 指定したスロット、フィールド名に100が書き込まれたあと、読み込んだ値が100となること", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldname = "A"
+		const expected = 100
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+
+		if err := ts.SetInt32(ctx, fldname, 100); err != nil {
+			t.Fatalf("SetInt32に失敗した: %v", err)
+		}
+
+		got, err := ts.GetInt32(ctx, fldname)
+		if err != nil {
+			t.Fatalf("GetInt32に失敗した: %v", err)
+		}
+
+		if got != expected {
+			t.Fatalf("書き込まれた値は100のままであるべきだが%dだった", got)
+		}
+	})
 }
