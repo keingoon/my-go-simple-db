@@ -81,9 +81,9 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("NewTableScanに失敗した: %v", err)
 		}
 
-		got, err := env.fm.Length(tblname + ".tbl")
+		got, err := txmgr.Size(ctx, tblname+".tbl")
 		if err != nil {
-			t.Fatalf("Lengthに失敗した: %v", err)
+			t.Fatalf("Sizeに失敗した: %v", err)
 		}
 		if got != 1 {
 			t.Fatalf("ブロック数は1であるべきだが%dだった", got)
@@ -103,9 +103,9 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("NewTableScanに失敗した: %v", err)
 		}
 
-		got, err := env.fm.Length(tblname + ".tbl")
+		got, err := txmgr.Size(ctx, tblname+".tbl")
 		if err != nil {
-			t.Fatalf("Lengthに失敗した: %v", err)
+			t.Fatalf("Sizeに失敗した: %v", err)
 		}
 		if got != 1 {
 			t.Fatalf("ブロック数は1のままであるべきだが%dだった", got)
