@@ -325,7 +325,63 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("Nextに失敗した: %v", err)
 		}
 		if got != false {
-			t.Fatalf("ブロック数はfalseであるべきだが%vだった", got)
+			t.Fatalf("Nextはfalseであるべきだが%vだった", got)
+		}
+	})
+
+	t.Run("Next: InsertしたレコードをBeforeFirst後に辿れる", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+
+		gotNext, err := ts.Next(ctx);
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+		if gotNext != true {
+			t.Fatalf("NextはTrueであるべきだが%vだった", gotNext)
+		}
+
+		const fldnameInt = "A"
+		const expectedInt int32 = 100
+		if err := ts.SetInt(ctx, fldnameInt, expectedInt); err != nil {
+			t.Fatalf("SetIntに失敗した: %v", err)
+		}
+
+		gotInt, err := ts.GetInt(ctx, fldnameInt)
+		if err != nil {
+			t.Fatalf("GetIntに失敗した: %v", err)
+		}
+		if gotInt != expectedInt {
+			t.Fatalf("書き込まれた値は%dであるべきだが%dだった", expectedInt, gotInt)
+		}
+
+		const fldnameString = "B"
+		const expectedString string = "hello"
+		if err := ts.SetString(ctx, fldnameString, expectedString); err != nil {
+			t.Fatalf("SetStringに失敗した: %v", err)
+		}
+
+		gotStr, err := ts.GetString(ctx, fldnameString)
+		if err != nil {
+			t.Fatalf("GetIntに失敗した: %v", err)
+		}
+		if gotStr != expectedString {
+			t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expectedString, gotStr)
 		}
 	})
 }

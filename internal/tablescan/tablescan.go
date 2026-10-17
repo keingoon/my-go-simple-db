@@ -118,6 +118,10 @@ func (ts *TableScan) Insert(ctx context.Context) error {
 	return nil
 }
 
+func (ts *TableScan) BeforeFirst(ctx context.Context) error {
+	return ts.moveToBlock(ctx, 0);
+}
+
 func (ts *TableScan) Next(ctx context.Context) (bool, error) {
 	currentslot, err := ts.rp.NextAfter(ctx, ts.currentslot)
 	if err != nil {
