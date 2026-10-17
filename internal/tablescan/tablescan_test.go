@@ -3,6 +3,7 @@ package tablescan
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/keingoon/simpledb/internal/buffer"
 	"github.com/keingoon/simpledb/internal/file"
@@ -111,7 +112,7 @@ func TestTableScan(t *testing.T) {
 		}
 	})
 
-	t.Run("SetInt: 指定したスロット、フィールド名に100が書き込まれたあと、読み込んだ値が100となること", func(t *testing.T) {
+	t.Run("SetInt: Insertしたレコードに書いた値をGetIntで読める", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
 		env := newTsTestEnv(t)
@@ -123,12 +124,12 @@ func TestTableScan(t *testing.T) {
 		}
 
 		const fldname = "A"
-		const expected = 100
+		const expected int32 = 100
 		if err := ts.Insert(ctx); err != nil {
 			t.Fatalf("Insertに失敗した: %v", err)
 		}
 
-		if err := ts.SetInt(ctx, fldname, 100); err != nil {
+		if err := ts.SetInt(ctx, fldname, expected); err != nil {
 			t.Fatalf("SetIntに失敗した: %v", err)
 		}
 
@@ -138,7 +139,132 @@ func TestTableScan(t *testing.T) {
 		}
 
 		if got != expected {
-			t.Fatalf("書き込まれた値は100のままであるべきだが%dだった", got)
+			t.Fatalf("書き込まれた値は%dであるべきだが%dだった", expected, got)
+		}
+	})
+
+	t.Run("SetSmallInt: Insertしたレコードに書いた値をGetSmallIntで読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		sch := record.NewSchema()
+		sch.AddSmallIntField("A")
+		layout := record.NewLayOut(sch)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldname = "A"
+		const expected int16 = 6
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+		if err := ts.SetSmallInt(ctx, fldname, expected); err != nil {
+			t.Fatalf("SetSmallIntに失敗した: %v", err)
+		}
+
+		got, err := ts.GetSmallInt(ctx, fldname)
+		if err != nil {
+			t.Fatalf("GetSmallIntに失敗した: %v", err)
+		}
+		if got != expected {
+			t.Fatalf("書き込まれた値は%dであるべきだが%dだった", expected, got)
+		}
+	})
+
+	t.Run("SetBool: Insertしたレコードに書いた値をGetBoolで読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		sch := record.NewSchema()
+		sch.AddBoolField("A")
+		layout := record.NewLayOut(sch)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldname = "A"
+		const expected = true
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+		if err := ts.SetBool(ctx, fldname, expected); err != nil {
+			t.Fatalf("SetBoolに失敗した: %v", err)
+		}
+
+		got, err := ts.GetBool(ctx, fldname)
+		if err != nil {
+			t.Fatalf("GetBoolに失敗した: %v", err)
+		}
+		if got != expected {
+			t.Fatalf("書き込まれた値は%tであるべきだが%tだった", expected, got)
+		}
+	})
+
+	t.Run("SetDate: Insertしたレコードに書いた値をGetDateで読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		sch := record.NewSchema()
+		sch.AddDateField("A")
+		layout := record.NewLayOut(sch)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldname = "A"
+		expected := time.Date(2025, 2, 28, 0, 0, 0, 0, time.UTC)
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+		if err := ts.SetDate(ctx, fldname, expected); err != nil {
+			t.Fatalf("SetDateに失敗した: %v", err)
+		}
+
+		got, err := ts.GetDate(ctx, fldname)
+		if err != nil {
+			t.Fatalf("GetDateに失敗した: %v", err)
+		}
+		if got != expected {
+			t.Fatalf("書き込まれた値は%vであるべきだが%vだった", expected, got)
+		}
+	})
+
+	t.Run("SetString: Insertしたレコードに書いた値をGetStringで読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldname = "B"
+		const expected = "hello"
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("Insertに失敗した: %v", err)
+		}
+		if err := ts.SetString(ctx, fldname, expected); err != nil {
+			t.Fatalf("SetStringに失敗した: %v", err)
+		}
+
+		got, err := ts.GetString(ctx, fldname)
+		if err != nil {
+			t.Fatalf("GetStringに失敗した: %v", err)
+		}
+		if got != expected {
+			t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expected, got)
 		}
 	})
 }

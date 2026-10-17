@@ -3,6 +3,7 @@ package tablescan
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/keingoon/simpledb/internal/file"
 	"github.com/keingoon/simpledb/internal/record"
@@ -54,6 +55,38 @@ func (ts *TableScan) SetInt(ctx context.Context, fldname string, val int32) erro
 
 func (ts *TableScan) GetInt(ctx context.Context, fldname string) (int32, error) {
 	return ts.rp.GetInt(ctx, ts.currentslot, fldname)
+}
+
+func (ts *TableScan) SetSmallInt(ctx context.Context, fldname string, val int16) error {
+	return ts.rp.SetSmallInt(ctx, ts.currentslot, fldname, val)
+}
+
+func (ts *TableScan) GetSmallInt(ctx context.Context, fldname string) (int16, error) {
+	return ts.rp.GetSmallInt(ctx, ts.currentslot, fldname)
+}
+
+func (ts *TableScan) SetBool(ctx context.Context, fldname string, val bool) error {
+	return ts.rp.SetBool(ctx, ts.currentslot, fldname, val)
+}
+
+func (ts *TableScan) GetBool(ctx context.Context, fldname string) (bool, error) {
+	return ts.rp.GetBool(ctx, ts.currentslot, fldname)
+}
+
+func (ts *TableScan) SetDate(ctx context.Context, fldname string, val time.Time) error {
+	return ts.rp.SetDate(ctx, ts.currentslot, fldname, val)
+}
+
+func (ts *TableScan) GetDate(ctx context.Context, fldname string) (time.Time, error) {
+	return ts.rp.GetDate(ctx, ts.currentslot, fldname)
+}
+
+func (ts *TableScan) SetString(ctx context.Context, fldname string, val string) error {
+	return ts.rp.SetStr(ctx, ts.currentslot, fldname, val)
+}
+
+func (ts *TableScan) GetString(ctx context.Context, fldname string) (string, error) {
+	return ts.rp.GetString(ctx, ts.currentslot, fldname)
 }
 
 func (ts *TableScan) Insert(ctx context.Context) error {
