@@ -118,6 +118,35 @@ func (ts *TableScan) Insert(ctx context.Context) error {
 	return nil
 }
 
+func (ts *TableScan) Next(ctx context.Context) (bool, error) {
+	currentslot, err := ts.rp.NextAfter(ctx, ts.currentslot)
+	if err != nil {
+		return false, fmt.Errorf("could not insert: %w", err)
+	}
+	ts.currentslot = currentslot
+
+	for ts.currentslot < 0 {
+		isAtLastBlk, err := ts.atLastBlock(ctx)
+		if err != nil {
+			return false, fmt.Errorf("could not get atLastBlock: %w", err)
+		}
+		if isAtLastBlk {
+			return false, nil
+		} else {
+			if err := ts.moveToBlock(ctx, ts.rp.Block().Number()+1); err != nil {
+				return false, fmt.Errorf("could not moveToBlock: %w", err)
+			}
+			currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+			if err != nil {
+				return false, fmt.Errorf("could not insert: %w", err)
+			}
+			ts.currentslot = currentslot
+		}
+	}
+
+	return true, nil
+}
+
 func (ts *TableScan) moveToNewBlock(ctx context.Context) error {
 	ts.close(ctx)
 	blk, err := ts.tx.Append(ctx, ts.filename)

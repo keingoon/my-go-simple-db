@@ -310,4 +310,24 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("ブロック数は2であるべきだが%dだった", got)
 		}
 	})
+
+	t.Run("Next: 空のテーブルならfalseを返す", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		got, err := ts.Next(ctx);
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+		if got != false {
+			t.Fatalf("ブロック数はfalseであるべきだが%vだった", got)
+		}
+	})
 }
