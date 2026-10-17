@@ -267,4 +267,47 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expected, got)
 		}
 	})
+
+	t.Run("Insert: 最後のブロックに到達した後にInsertすると新しいブロックが作成される", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		slotsPerBlock := (blocksize - file.PageHeaderSize) / layout.SlotSize()
+
+		const fldname = "A"
+		const expected int32 = 100
+		for i := int32(0); i < slotsPerBlock; i++ {
+			if err := ts.Insert(ctx); err != nil {
+				t.Fatalf("%d件目のInsertに失敗した: %v", i+1, err)
+			}
+		}
+		
+		got, err := txmgr.Size(ctx, tblname+".tbl")
+		if err != nil {
+			t.Fatalf("Sizeに失敗した: %v", err)
+		}
+		if got != 1 {
+			t.Fatalf("満杯直後のブロック数は1であるべきだが%dだった", got)
+		}
+
+		if err := ts.Insert(ctx); err != nil {
+			t.Fatalf("満杯後のInsertに失敗した: %v", err)
+		}
+
+		got, err = txmgr.Size(ctx, tblname+".tbl")
+		if err != nil {
+			t.Fatalf("Sizeに失敗した: %v", err)
+		}
+		if got != 2 {
+			t.Fatalf("ブロック数は2であるべきだが%dだった", got)
+		}
+	})
 }

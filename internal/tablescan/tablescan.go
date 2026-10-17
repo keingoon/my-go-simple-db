@@ -149,5 +149,5 @@ func (ts *TableScan) atLastBlock(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("could not get size: %w", err)
 	}
-	return ts.rp.Block().Number() == size, nil
+	return ts.rp.Block().Number() == size - 1, nil
 }
