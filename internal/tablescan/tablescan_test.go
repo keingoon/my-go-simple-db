@@ -282,8 +282,6 @@ func TestTableScan(t *testing.T) {
 
 		slotsPerBlock := (blocksize - file.PageHeaderSize) / layout.SlotSize()
 
-		const fldname = "A"
-		const expected int32 = 100
 		for i := int32(0); i < slotsPerBlock; i++ {
 			if err := ts.Insert(ctx); err != nil {
 				t.Fatalf("%d件目のInsertに失敗した: %v", i+1, err)
