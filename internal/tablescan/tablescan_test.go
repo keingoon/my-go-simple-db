@@ -68,6 +68,33 @@ func newTestLayout() *record.Layout {
 	return record.NewLayOut(sch)
 }
 
+type recordColumn struct {
+	key string
+	val any
+}
+
+func setRecord(t *testing.T, ctx context.Context, ts *TableScan, columnSets ...recordColumn) {
+	t.Helper()
+	if err := ts.Insert(ctx); err != nil {
+		t.Fatalf("Insertに失敗した: %v", err)
+	}
+
+	for _, col := range columnSets {
+		switch v := col.val.(type) {
+		case int32:
+			if err := ts.SetInt(ctx, col.key, v); err != nil {
+				t.Fatalf("SetIntに失敗した: %v", err)
+			}
+		case string:
+			if err := ts.SetString(ctx, col.key, v); err != nil {
+				t.Fatalf("SetStringに失敗した: %v", err)
+			}
+		default:
+			t.Fatalf("未対応の型: %T", v)
+		}
+	}
+}
+
 func TestTableScan(t *testing.T) {
 	t.Parallel()
 
@@ -287,7 +314,7 @@ func TestTableScan(t *testing.T) {
 				t.Fatalf("%d件目のInsertに失敗した: %v", i+1, err)
 			}
 		}
-		
+
 		got, err := txmgr.Size(ctx, tblname+".tbl")
 		if err != nil {
 			t.Fatalf("Sizeに失敗した: %v", err)
@@ -320,7 +347,7 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("NewTableScanに失敗した: %v", err)
 		}
 
-		got, err := ts.Next(ctx);
+		got, err := ts.Next(ctx)
 		if err != nil {
 			t.Fatalf("Nextに失敗した: %v", err)
 		}
@@ -340,26 +367,22 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("NewTableScanに失敗した: %v", err)
 		}
 
-		if err := ts.Insert(ctx); err != nil {
-			t.Fatalf("Insertに失敗した: %v", err)
-		}
+		const fldnameInt = "A"
+		const expectedInt int32 = 100
+		const fldnameString = "B"
+		const expectedString string = "hello"
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, expectedInt}, recordColumn{fldnameString, expectedString})
 
 		if err := ts.BeforeFirst(ctx); err != nil {
 			t.Fatalf("BeforeFirstに失敗した: %v", err)
 		}
 
-		gotNext, err := ts.Next(ctx);
+		gotNext, err := ts.Next(ctx)
 		if err != nil {
 			t.Fatalf("Nextに失敗した: %v", err)
 		}
 		if gotNext != true {
 			t.Fatalf("NextはTrueであるべきだが%vだった", gotNext)
-		}
-
-		const fldnameInt = "A"
-		const expectedInt int32 = 100
-		if err := ts.SetInt(ctx, fldnameInt, expectedInt); err != nil {
-			t.Fatalf("SetIntに失敗した: %v", err)
 		}
 
 		gotInt, err := ts.GetInt(ctx, fldnameInt)
@@ -370,18 +393,69 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("書き込まれた値は%dであるべきだが%dだった", expectedInt, gotInt)
 		}
 
-		const fldnameString = "B"
-		const expectedString string = "hello"
-		if err := ts.SetString(ctx, fldnameString, expectedString); err != nil {
-			t.Fatalf("SetStringに失敗した: %v", err)
-		}
-
 		gotStr, err := ts.GetString(ctx, fldnameString)
 		if err != nil {
-			t.Fatalf("GetIntに失敗した: %v", err)
+			t.Fatalf("GetStringに失敗した: %v", err)
 		}
 		if gotStr != expectedString {
 			t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expectedString, gotStr)
+		}
+	})
+
+	t.Run("Next: 複数件 Insert すると Next で全件を挿入順に読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const expectedCount int32 = 5
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		const expectedString string = "hello"
+		for i := int32(0); i < expectedCount; i++ {
+			setRecord(t, ctx, ts, recordColumn{fldnameInt, i}, recordColumn{fldnameString, expectedString})
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+
+		count := int32(0)
+		for {
+			ok, err := ts.Next(ctx)
+			if err != nil {
+				t.Fatalf("Nextに失敗した: %v", err)
+			}
+			if !ok {
+				break
+			}
+
+			gotInt, err := ts.GetInt(ctx, fldnameInt)
+			if err != nil {
+				t.Fatalf("GetIntに失敗した: %v", err)
+			}
+			if gotInt != count {
+				t.Fatalf("Aは%dであるべきだが%dだった", count, gotInt)
+			}
+
+			gotStr, err := ts.GetString(ctx, fldnameString)
+			if err != nil {
+				t.Fatalf("GetStringに失敗した: %v", err)
+			}
+			if gotStr != expectedString {
+				t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expectedString, gotStr)
+			}
+
+			count++
+		}
+
+		if count != expectedCount {
+			t.Fatalf("書き込まれたレコード数は%dであるべきだが%dだった", expectedCount, count)
 		}
 	})
 }
