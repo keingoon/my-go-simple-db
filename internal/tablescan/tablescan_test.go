@@ -337,6 +337,83 @@ func TestTableScan(t *testing.T) {
 		}
 	})
 
+	t.Run("Delete: Delete で空いたスロットに次の Insert が入る", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, int32(1)}, recordColumn{fldnameString, "v1"})
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, int32(2)}, recordColumn{fldnameString, "v2"})
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+		ok, err := ts.Next(ctx)
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+		if !ok {
+			t.Fatalf("1件目のNextはtrueであるべき")
+		}
+		if err := ts.Delete(ctx); err != nil {
+			t.Fatalf("Deleteに失敗した: %v", err)
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, int32(3)}, recordColumn{fldnameString, "v3"})
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+
+		expectedInts := []int32{3, 2}
+		expectedStrs := []string{"v3", "v2"}
+		count := 0
+		for {
+			ok, err := ts.Next(ctx)
+			if err != nil {
+				t.Fatalf("Nextに失敗した: %v", err)
+			}
+			if !ok {
+				break
+			}
+			if count >= len(expectedInts) {
+				t.Fatalf("レコード数が%dを超えた", len(expectedInts))
+			}
+
+			gotInt, err := ts.GetInt(ctx, fldnameInt)
+			if err != nil {
+				t.Fatalf("GetIntに失敗した: %v", err)
+			}
+			if gotInt != expectedInts[count] {
+				t.Fatalf("Aは%dであるべきだが%dだった", expectedInts[count], gotInt)
+			}
+
+			gotStr, err := ts.GetString(ctx, fldnameString)
+			if err != nil {
+				t.Fatalf("GetStringに失敗した: %v", err)
+			}
+			if gotStr != expectedStrs[count] {
+				t.Fatalf("Bは%qであるべきだが%qだった", expectedStrs[count], gotStr)
+			}
+			count++
+		}
+		if count != len(expectedInts) {
+			t.Fatalf("レコード数は%dであるべきだが%dだった", len(expectedInts), count)
+		}
+	})
+
 	t.Run("Next: 空のテーブルならfalseを返す", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
