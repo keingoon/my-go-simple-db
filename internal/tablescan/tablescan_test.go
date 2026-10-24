@@ -518,4 +518,39 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("書き込まれたレコード数は%dであるべきだが%dだった", expectedCount, count)
 		}
 	})
+
+	t.Run("Next: Delete したレコードは Next で読めなくなる", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldnameInt = "A"
+		const expectedInt int32 = 100
+		const fldnameString = "B"
+		const expectedString string = "hello"
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, expectedInt}, recordColumn{fldnameString, expectedString})
+
+		if err := ts.Delete(ctx); err != nil {
+			t.Fatalf("Deleteに失敗した: %v", err)
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+		isNext, err := ts.Next(ctx)
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+
+		if isNext {
+			t.Fatalf("Nextで読めなくなるはずが読めてしまった")
+		}
+	})
 }
