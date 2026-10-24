@@ -2,6 +2,7 @@ package tablescan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -416,9 +417,8 @@ func TestTableScan(t *testing.T) {
 		const expectedCount int32 = 5
 		const fldnameInt = "A"
 		const fldnameString = "B"
-		const expectedString string = "hello"
 		for i := int32(0); i < expectedCount; i++ {
-			setRecord(t, ctx, ts, recordColumn{fldnameInt, i}, recordColumn{fldnameString, expectedString})
+			setRecord(t, ctx, ts, recordColumn{fldnameInt, i}, recordColumn{fldnameString, fmt.Sprintf("v%d", i)})
 		}
 
 		if err := ts.BeforeFirst(ctx); err != nil {
@@ -447,8 +447,9 @@ func TestTableScan(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetStringに失敗した: %v", err)
 			}
+			expectedString := fmt.Sprintf("v%d", count)
 			if gotStr != expectedString {
-				t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expectedString, gotStr)
+				t.Fatalf("Bは%qであるべきだが%qだった", expectedString, gotStr)
 			}
 
 			count++
