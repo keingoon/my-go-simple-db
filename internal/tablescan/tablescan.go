@@ -119,7 +119,7 @@ func (ts *TableScan) Insert(ctx context.Context) error {
 }
 
 func (ts *TableScan) BeforeFirst(ctx context.Context) error {
-	return ts.moveToBlock(ctx, 0);
+	return ts.moveToBlock(ctx, 0)
 }
 
 func (ts *TableScan) Next(ctx context.Context) (bool, error) {
@@ -140,7 +140,7 @@ func (ts *TableScan) Next(ctx context.Context) (bool, error) {
 			if err := ts.moveToBlock(ctx, ts.rp.Block().Number()+1); err != nil {
 				return false, fmt.Errorf("could not moveToBlock: %w", err)
 			}
-			currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+			currentslot, err := ts.rp.NextAfter(ctx, ts.currentslot)
 			if err != nil {
 				return false, fmt.Errorf("could not insert: %w", err)
 			}
@@ -182,5 +182,5 @@ func (ts *TableScan) atLastBlock(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("could not get size: %w", err)
 	}
-	return ts.rp.Block().Number() == size - 1, nil
+	return ts.rp.Block().Number() == size-1, nil
 }

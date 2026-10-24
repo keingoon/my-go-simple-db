@@ -459,4 +459,63 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("書き込まれたレコード数は%dであるべきだが%dだった", expectedCount, count)
 		}
 	})
+
+	t.Run("Next: ブロックをまたいで Insert した全件を Next で漏れなく読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		slotsPerBlock := (blocksize - file.PageHeaderSize) / layout.SlotSize()
+		var expectedCount int32 = slotsPerBlock + 1
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		for i := int32(0); i < expectedCount; i++ {
+			setRecord(t, ctx, ts, recordColumn{fldnameInt, i}, recordColumn{fldnameString, fmt.Sprintf("v%d", i)})
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+
+		count := int32(0)
+		for {
+			ok, err := ts.Next(ctx)
+			if err != nil {
+				t.Fatalf("Nextに失敗した: %v", err)
+			}
+			if !ok {
+				break
+			}
+
+			gotInt, err := ts.GetInt(ctx, fldnameInt)
+			if err != nil {
+				t.Fatalf("GetIntに失敗した: %v", err)
+			}
+			if gotInt != count {
+				t.Fatalf("Aは%dであるべきだが%dだった", count, gotInt)
+			}
+
+			gotStr, err := ts.GetString(ctx, fldnameString)
+			if err != nil {
+				t.Fatalf("GetStringに失敗した: %v", err)
+			}
+			expectedString := fmt.Sprintf("v%d", count)
+			if gotStr != expectedString {
+				t.Fatalf("Bは%qであるべきだが%qだった", expectedString, gotStr)
+			}
+
+			count++
+		}
+
+		if count != expectedCount {
+			t.Fatalf("書き込まれたレコード数は%dであるべきだが%dだった", expectedCount, count)
+		}
+	})
 }
