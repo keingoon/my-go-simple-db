@@ -140,6 +140,58 @@ func TestTableScan(t *testing.T) {
 		}
 	})
 
+	t.Run("既存のテーブルを開き直しても、レコードが残っている", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		layout := newTestLayout()
+		tx1 := env.newTx(t)
+
+		ts, err := NewTableScan(ctx, tx1, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, int32(1)}, recordColumn{fldnameString, "v1"})
+		ts.Close(ctx)
+		if err := tx1.Commit(ctx); err != nil {
+			t.Fatalf("Commitに失敗した: %v", err)
+		}
+
+		tx2 := env.newTx(t)
+		ts, err = NewTableScan(ctx, tx2, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+		ok, err := ts.Next(ctx)
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+		if !ok {
+			t.Fatalf("Nextはtrueであるべき")
+		}
+
+		const expectedInt int32 = 1
+		const expectedString string = "v1"
+		gotInt, err := ts.GetInt(ctx, fldnameInt)
+		if err != nil {
+			t.Fatalf("GetIntに失敗した: %v", err)
+		}
+		if gotInt != expectedInt {
+			t.Fatalf("書き込まれた値は%dであるべきだが%dだった", expectedInt, gotInt)
+		}
+
+		gotStr, err := ts.GetString(ctx, fldnameString)
+		if err != nil {
+			t.Fatalf("GetStringに失敗した: %v", err)
+		}
+		if gotStr != expectedString {
+			t.Fatalf("書き込まれた値は%qであるべきだが%qだった", expectedString, gotStr)
+		}
+	})
+
 	t.Run("Close: Close 後にピンが残っていない", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()
