@@ -54,6 +54,10 @@ func (ts *TableScan) MoveToRid(ctx context.Context, rid *record.RID) {
 	ts.currentslot = rid.Slot()
 }
 
+func (ts *TableScan) HasField(fldname string) bool {
+	return ts.layout.Schema().HasField(fldname)
+}
+
 func (ts *TableScan) close(ctx context.Context) {
 	if ts.rp != nil {
 		ts.tx.Unpin(ctx, ts.rp.Block())

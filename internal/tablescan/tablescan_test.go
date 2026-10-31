@@ -718,4 +718,32 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("Bは%qであるべきだが%qだった", expectedString, gotStr)
 		}
 	})
+
+	t.Run("HasField: HasField はスキーマにあるフィールドなら true ないなら false を返す", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		if !ts.HasField(fldnameInt) {
+			t.Fatalf("%q を引数に受け取る HasFieldはtrueであるべき", fldnameInt)
+		}
+
+		if !ts.HasField(fldnameString) {
+			t.Fatalf("%q を引数に受け取る HasFieldはtrueであるべき", fldnameString)
+		}
+
+		const nothingFldName = "NOFIELD"
+		if ts.HasField(nothingFldName) {
+			t.Fatalf("%q を引数に受け取る HasFieldはfalseであるべき", nothingFldName)
+		}
+	})
 }
