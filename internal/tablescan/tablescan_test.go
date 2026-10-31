@@ -140,6 +140,27 @@ func TestTableScan(t *testing.T) {
 		}
 	})
 
+	t.Run("Close: Close 後にピンが残っていない", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		beforePin := env.bm.Available()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, newTestLayout())
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		if env.bm.Available() != beforePin-1 {
+			t.Fatalf("Open後はピンが1本残るべき")
+		}
+		ts.Close(ctx)
+		if env.bm.Available() != beforePin {
+			t.Fatalf("Close後はピンが残っていないべき")
+		}
+	})
+
 	t.Run("SetInt: Insertしたレコードに書いた値をGetIntで読める", func(t *testing.T) {
 		t.Parallel()
 		ctx := context.Background()

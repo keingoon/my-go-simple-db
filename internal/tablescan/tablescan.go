@@ -48,7 +48,7 @@ func (ts *TableScan) GetRid() *record.RID {
 }
 
 func (ts *TableScan) MoveToRid(ctx context.Context, rid *record.RID) {
-	ts.close(ctx)
+	ts.Close(ctx)
 	blk := file.NewBlockId(ts.filename, rid.BlockNumber())
 	ts.rp = recordpage.NewRecordPage(ctx, ts.tx, blk, ts.layout)
 	ts.currentslot = rid.Slot()
@@ -58,7 +58,7 @@ func (ts *TableScan) HasField(fldname string) bool {
 	return ts.layout.Schema().HasField(fldname)
 }
 
-func (ts *TableScan) close(ctx context.Context) {
+func (ts *TableScan) Close(ctx context.Context) {
 	if ts.rp != nil {
 		ts.tx.Unpin(ctx, ts.rp.Block())
 	}
@@ -171,7 +171,7 @@ func (ts *TableScan) Next(ctx context.Context) (bool, error) {
 }
 
 func (ts *TableScan) moveToNewBlock(ctx context.Context) error {
-	ts.close(ctx)
+	ts.Close(ctx)
 	blk, err := ts.tx.Append(ctx, ts.filename)
 	if err != nil {
 		return fmt.Errorf("could not append: %w", err)
@@ -186,7 +186,7 @@ func (ts *TableScan) moveToNewBlock(ctx context.Context) error {
 }
 
 func (ts *TableScan) moveToBlock(ctx context.Context, blknum int32) error {
-	ts.close(ctx)
+	ts.Close(ctx)
 	blk := file.NewBlockId(ts.filename, blknum)
 	rp := recordpage.NewRecordPage(ctx, ts.tx, blk, ts.layout)
 
