@@ -47,6 +47,13 @@ func (ts *TableScan) GetRid() *record.RID {
 	return record.NewRID(ts.rp.Block().Number(), ts.currentslot)
 }
 
+func (ts *TableScan) MoveToRid(ctx context.Context, rid *record.RID) {
+	ts.close(ctx)
+	blk := file.NewBlockId(ts.filename, rid.BlockNumber())
+	ts.rp = recordpage.NewRecordPage(ctx, ts.tx, blk, ts.layout)
+	ts.currentslot = rid.Slot()
+}
+
 func (ts *TableScan) close(ctx context.Context) {
 	if ts.rp != nil {
 		ts.tx.Unpin(ctx, ts.rp.Block())

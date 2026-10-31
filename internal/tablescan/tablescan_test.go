@@ -673,4 +673,49 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("RIDが%vであるべきだが%vを返す", expectedRid, rid)
 		}
 	})
+
+	t.Run("MoveToRid: MoveToRid で指定したレコードに移動し、その値を読める", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		var expectedCount int32 = 5
+		const fldnameInt = "A"
+		const fldnameString = "B"
+		for i := int32(0); i < expectedCount; i++ {
+			setRecord(t, ctx, ts, recordColumn{fldnameInt, i}, recordColumn{fldnameString, fmt.Sprintf("v%d", i)})
+		}
+
+		const targetSlot int32 = 2
+		expectedRid := record.NewRID(0, targetSlot)
+		ts.MoveToRid(ctx, expectedRid)
+
+		if got := ts.GetRid(); !got.Equals(expectedRid) {
+			t.Fatalf("RIDは%sであるべきだが%sだった", expectedRid.ToString(), got.ToString())
+		}
+
+		gotInt, err := ts.GetInt(ctx, fldnameInt)
+		if err != nil {
+			t.Fatalf("GetIntに失敗した: %v", err)
+		}
+		if gotInt != targetSlot {
+			t.Fatalf("Aは%dであるべきだが%dだった", targetSlot, gotInt)
+		}
+
+		gotStr, err := ts.GetString(ctx, fldnameString)
+		if err != nil {
+			t.Fatalf("GetStringに失敗した: %v", err)
+		}
+		expectedString := fmt.Sprintf("v%d", targetSlot)
+		if gotStr != expectedString {
+			t.Fatalf("Bは%qであるべきだが%qだった", expectedString, gotStr)
+		}
+	})
 }
