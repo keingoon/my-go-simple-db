@@ -12,7 +12,6 @@ import (
 )
 
 type TableScan struct {
-	ctx         context.Context
 	tx          *tx.TransactionMgr
 	layout      *record.Layout
 	rp          *recordpage.RecordPage
@@ -105,11 +104,11 @@ func (ts *TableScan) GetString(ctx context.Context, fldname string) (string, err
 }
 
 func (ts *TableScan) Insert(ctx context.Context) error {
-	currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+	var err error
+	ts.currentslot, err = ts.rp.InsertAfter(ctx, ts.currentslot)
 	if err != nil {
 		return fmt.Errorf("could not insert: %w", err)
 	}
-	ts.currentslot = currentslot
 	for ts.currentslot < 0 {
 		isAtLastBlk, err := ts.atLastBlock(ctx)
 		if err != nil {
@@ -124,11 +123,10 @@ func (ts *TableScan) Insert(ctx context.Context) error {
 				return fmt.Errorf("could not moveToBlock: %w", err)
 			}
 		}
-		currentslot, err := ts.rp.InsertAfter(ctx, ts.currentslot)
+		ts.currentslot, err = ts.rp.InsertAfter(ctx, ts.currentslot)
 		if err != nil {
 			return fmt.Errorf("could not insert: %w", err)
 		}
-		ts.currentslot = currentslot
 	}
 	return nil
 }
@@ -142,11 +140,11 @@ func (ts *TableScan) BeforeFirst(ctx context.Context) error {
 }
 
 func (ts *TableScan) Next(ctx context.Context) (bool, error) {
-	currentslot, err := ts.rp.NextAfter(ctx, ts.currentslot)
+	var err error
+	ts.currentslot, err = ts.rp.NextAfter(ctx, ts.currentslot)
 	if err != nil {
-		return false, fmt.Errorf("could not insert: %w", err)
+		return false, fmt.Errorf("could not next: %w", err)
 	}
-	ts.currentslot = currentslot
 
 	for ts.currentslot < 0 {
 		isAtLastBlk, err := ts.atLastBlock(ctx)
@@ -155,15 +153,13 @@ func (ts *TableScan) Next(ctx context.Context) (bool, error) {
 		}
 		if isAtLastBlk {
 			return false, nil
-		} else {
-			if err := ts.moveToBlock(ctx, ts.rp.Block().Number()+1); err != nil {
-				return false, fmt.Errorf("could not moveToBlock: %w", err)
-			}
-			currentslot, err := ts.rp.NextAfter(ctx, ts.currentslot)
-			if err != nil {
-				return false, fmt.Errorf("could not insert: %w", err)
-			}
-			ts.currentslot = currentslot
+		}
+		if err := ts.moveToBlock(ctx, ts.rp.Block().Number()+1); err != nil {
+			return false, fmt.Errorf("could not moveToBlock: %w", err)
+		}
+		ts.currentslot, err = ts.rp.NextAfter(ctx, ts.currentslot)
+		if err != nil {
+			return false, fmt.Errorf("could not next: %w", err)
 		}
 	}
 
