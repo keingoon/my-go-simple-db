@@ -858,6 +858,100 @@ func TestTransaction_Persistence(t *testing.T) {
 	})
 }
 
+func TestTransaction_FileSize(t *testing.T) {
+	t.Run("Size: ブロックがないファイルなら0を返す", func(t *testing.T) {
+		// Arrange
+		env := newTxTestEnv(t, "")
+		ctx := context.Background()
+		tx := env.newTx(t)
+
+		// Act
+		got, err := tx.Size(ctx, filename)
+
+		// Assert
+		if err != nil {
+			t.Fatalf("Size failed: %v", err)
+		}
+		if got != 0 {
+			t.Fatalf("expected size 0, got %d", got)
+		}
+		tx.Commit(ctx)
+	})
+
+	t.Run("Size: 追加済みのブロック数を返す", func(t *testing.T) {
+		// Arrange
+		env := newTxTestEnv(t, "")
+		ctx := context.Background()
+		mustAppendBlock(t, env.fm, filename)
+		mustAppendBlock(t, env.fm, filename)
+		tx := env.newTx(t)
+
+		// Act
+		got, err := tx.Size(ctx, filename)
+
+		// Assert
+		if err != nil {
+			t.Fatalf("Size failed: %v", err)
+		}
+		if got != 2 {
+			t.Fatalf("expected size 2, got %d", got)
+		}
+		tx.Commit(ctx)
+	})
+
+	t.Run("Append: 空のファイルに追加すると0番のブロックを返す", func(t *testing.T) {
+		// Arrange
+		env := newTxTestEnv(t, "")
+		ctx := context.Background()
+		tx := env.newTx(t)
+
+		// Act
+		blk, err := tx.Append(ctx, filename)
+
+		// Assert
+		if err != nil {
+			t.Fatalf("Append failed: %v", err)
+		}
+		if blk.FileName() != filename {
+			t.Fatalf("expected filename %q, got %q", filename, blk.FileName())
+		}
+		if blk.Number() != 0 {
+			t.Fatalf("expected block number 0, got %d", blk.Number())
+		}
+		tx.Commit(ctx)
+	})
+
+	t.Run("Append: 追加するたびにブロック番号とSizeが1ずつ増える", func(t *testing.T) {
+		// Arrange
+		env := newTxTestEnv(t, "")
+		ctx := context.Background()
+		tx := env.newTx(t)
+
+		// Act
+		blk1, err := tx.Append(ctx, filename)
+		if err != nil {
+			t.Fatalf("first Append failed: %v", err)
+		}
+		blk2, err := tx.Append(ctx, filename)
+		if err != nil {
+			t.Fatalf("second Append failed: %v", err)
+		}
+
+		// Assert
+		if blk1.Number() != 0 || blk2.Number() != 1 {
+			t.Fatalf("expected block numbers 0 and 1, got %d and %d", blk1.Number(), blk2.Number())
+		}
+		got, err := tx.Size(ctx, filename)
+		if err != nil {
+			t.Fatalf("Size failed: %v", err)
+		}
+		if got != 2 {
+			t.Fatalf("expected size 2, got %d", got)
+		}
+		tx.Commit(ctx)
+	})
+}
+
 func TestTransaction_Conflicts(t *testing.T) {
 	// Concurrency conflict tests
 	t.Run("SetInt32: 読み取り保持中のブロックへの書き込みはタイムアウトする", func(t *testing.T) {
