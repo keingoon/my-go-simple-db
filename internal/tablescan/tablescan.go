@@ -43,6 +43,10 @@ func NewTableScan(ctx context.Context, tx *tx.TransactionMgr, tblname string, la
 	return ts, nil
 }
 
+func (ts *TableScan) GetRid() *record.RID {
+	return record.NewRID(ts.rp.Block().Number(), ts.currentslot)
+}
+
 func (ts *TableScan) close(ctx context.Context) {
 	if ts.rp != nil {
 		ts.tx.Unpin(ctx, ts.rp.Block())

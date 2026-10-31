@@ -630,4 +630,47 @@ func TestTableScan(t *testing.T) {
 			t.Fatalf("Nextで読めなくなるはずが読めてしまった")
 		}
 	})
+
+	t.Run("GetRid: GetRid は現在のブロック番号とスロットを返す", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		env := newTsTestEnv(t)
+		txmgr := env.newTx(t)
+		layout := newTestLayout()
+
+		ts, err := NewTableScan(ctx, txmgr, tblname, layout)
+		if err != nil {
+			t.Fatalf("NewTableScanに失敗した: %v", err)
+		}
+
+		const fldnameInt = "A"
+		const expectedInt int32 = 100
+		const fldnameString = "B"
+		const expectedString string = "hello"
+
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, expectedInt}, recordColumn{fldnameString, expectedString})
+		setRecord(t, ctx, ts, recordColumn{fldnameInt, expectedInt}, recordColumn{fldnameString, expectedString})
+		rid := ts.GetRid()
+		expectedRid := record.NewRID(0, 1)
+		if !rid.Equals(expectedRid) {
+			t.Fatalf("RIDが%vであるべきだが%vを返す", expectedRid, rid)
+		}
+
+		if err := ts.BeforeFirst(ctx); err != nil {
+			t.Fatalf("BeforeFirstに失敗した: %v", err)
+		}
+		ok, err := ts.Next(ctx)
+		if err != nil {
+			t.Fatalf("Nextに失敗した: %v", err)
+		}
+		if !ok {
+			t.Fatalf("Nextはtrueであるべき")
+		}
+
+		rid = ts.GetRid()
+		expectedRid = record.NewRID(0, 0)
+		if !rid.Equals(expectedRid) {
+			t.Fatalf("RIDが%vであるべきだが%vを返す", expectedRid, rid)
+		}
+	})
 }
